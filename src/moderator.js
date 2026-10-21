@@ -1,7 +1,10 @@
-import { analyzeMessage, banDuration, escapeHtml } from './policy.js';
+import { analyzeMessage, banDuration } from './policy.js';
 import { createStore } from './store.js';
+import { createAnnouncer } from './announcements.js';
+import { createBotExperience } from './commands.js';
 
-export const RULES = '<b>SautiLink Pilot</b>\nLinks zisizoruhusiwa na forwarded messages zinaondolewa.\nKosa 1: ban saa 24. Kosa 2: siku 7. Kosa 3: permanent ban.\nOwner, admins, anonymous admins na posts rasmi za linked channel wameruhusiwa.\nLinks za sautilink.com na subdomains zake, pamoja na t.me/techhubtz, t.me/sautilink, t.me/sautilink_cloud na t.me/drcharlesofficial zinaruhusiwa.\n\nAdmin: /status, /strikes, /forgive, /unban, /pause, /resume. Reply kwa ujumbe wa mtu au tumia numeric user ID kwa amri zinazomhusu mtu.\n\nBan za muda zinahitaji supergroup. Ban ya Telegram inaweza pia kufuta ujumbe mwingine wa mtumiaji.';
+export const RULES = '<b>🛡 SautiLink Pilot</b>\nGroup lenye utulivu, mazungumzo yenye nafasi.\n\nLinks zisizoruhusiwa na ujumbe wa forward huondolewa.\nAdhabu: saa 24 → siku 7 → ban ya kudumu.\n\nTumia /rules kuona sheria za members, au fungua bot faraghani kwa mwongozo.';
+const ENGLISH_RULES = '<b>🛡 SautiLink Pilot</b>\nA calmer group. More room for conversation.\n\nUnapproved links and forwarded messages are removed.\nPenalties: 24 hours → 7 days → permanent ban.\n\nUse /rules for member rules, or open the bot privately for a guide.';
 const admin = m => m?.status === 'creator' || m?.status === 'administrator';
 const validId = id => Number.isSafeInteger(Number(id)) && Number(id) !== 0;
 const userId = id => validId(id) && Number(id) > 0;
@@ -15,13 +18,15 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000)}) 
     chat_id:Number(chat),text,parse_mode:'HTML',link_preview_options:{is_disabled:true},...extra
   });
   const member=(chat,user)=>api.call('getChatMember',{chat_id:Number(chat),user_id:Number(user)});
+  const announcer=createAnnouncer({store,api,clock});
+  const experience=createBotExperience({db,store,api,clock,me,say});
 
-  async function notice(chat,text) {
+  async function notice(chat,text,extra={}) {
     const group=await store.group(chat), now=clock();
     if(group.notice_at && now-group.notice_at<3600) return;
     // Claim first: a failed response must not flood the chat with repeated notices.
     await store.run('UPDATE groups SET notice_at=? WHERE chat_id=?',now,String(chat));
-    try { await say(chat,text); } catch { /* Permission failures are visible via /status. */ }
+    try { await say(chat,text,extra); } catch { /* Permission failures are visible privately via /status. */ }
   }
 
   async function deleteMessage(message) {
@@ -34,76 +39,6 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000)}) 
     }
   }
 
-  async function notifyIncident(row,message,success=true) {
-    if(!await store.claimNotice(row.id)) return;
-    const name=escapeHtml([message.from?.first_name,message.from?.last_name].filter(Boolean).join(' ') || 'Mtumiaji');
-    const who=row.user_id ? `<a href="tg://user?id=${Number(row.user_id)}">${name}</a>` : escapeHtml(message.sender_chat?.title || 'Channel');
-    const reasons=JSON.parse(row.reasons);
-    const reason=reasons.map(x=>x==='forward' ? 'Kutuma forwarded message isiyoruhusiwa' : 'Kutuma link isiyoruhusiwa').join(' na ');
-    const duration=row.strike===1 ? 'saa 24' : row.strike===2 ? 'siku 7' : 'muda wote (permanent ban)';
-    const text=success
-      ? `⛔ <b>${who} amefungiwa kwa ${duration}.</b>\n<b>Sababu:</b> ${reason}.\n<b>Kosa:</b> ${row.strike} kati ya 3.\n🗑 Ujumbe umeondolewa.\n<b>SautiLink Pilot</b>`
-      : `🗑 Ujumbe wa ${who} umeondolewa.\n<b>Sababu:</b> ${reason}.\nKufungiwa hakujathibitishwa; admin tafadhali kagua hali ya mtumaji.\n<b>SautiLink Pilot</b>`;
-    try { await say(message.chat.id,text,message.message_thread_id ? {message_thread_id:message.message_thread_id} : {}); }
-    catch { /* At-most-once notices: Telegram has no sendMessage idempotency key. */ }
-  }
-
-  async function handleCommand(message,updateId) {
-    const match=String(message.text || '').match(/^\/(start|help|pilot|rules|status|strikes|forgive|unban|pause|resume)(?:@([A-Za-z0-9_]+))?(?:\s+([\s\S]*))?$/i);
-    if(!match) return false;
-    const bot=await me(),command=match[1].toLowerCase();
-    if(match[2] && match[2].toLowerCase()!==bot.username.toLowerCase()) return true;
-    const chat=message.chat.id;
-    const acknowledge=async text=>{ try { await say(chat,text); } catch { /* Never replay a successful admin action because its notice failed. */ } };
-    if(['start','help','pilot','rules'].includes(command)) {
-      await say(chat,RULES, message.chat.type==='private' ? {
-        reply_markup:{inline_keyboard:[[{text:'Ongeza kwenye group',url:`https://t.me/${bot.username}?startgroup=true&admin=delete_messages+restrict_members`}]]}
-      } : {});
-      return true;
-    }
-    if(!['group','supergroup'].includes(message.chat.type)) {
-      await say(chat,'Tumia amri hii ndani ya group unalosimamia.'); return true;
-    }
-    const anonymous=String(message.sender_chat?.id)===String(chat);
-    if(!anonymous && (!userId(message.from?.id) || message.sender_chat || !admin(await member(chat,message.from.id)))) {
-      await say(chat,'Amri hii ni ya owner au admin wa group hili.'); return true;
-    }
-    const group=await store.group(chat);
-    if(command==='status') {
-      const own=await member(chat,bot.id);
-      await say(chat,`<b>SautiLink Pilot</b>\nModeration: ${group.enabled ? 'imewashwa' : 'imesitishwa'}.\nAina: ${escapeHtml(message.chat.type)}.\nRuhusa: ${own.can_delete_messages && own.can_restrict_members ? 'zimekamilika' : 'inahitaji Delete messages na Ban users'}.\nAdhabu: saa 24 → siku 7 → permanent.`); return true;
-    }
-    if(command==='pause' || command==='resume') {
-      await db.batch([
-        db.prepare('UPDATE groups SET enabled=?,activated_at=? WHERE chat_id=?').bind(command==='resume' ? 1 : 0,clock(),String(chat)),
-        db.prepare('INSERT OR IGNORE INTO processed_updates VALUES(?,?)').bind(updateId,clock())
-      ]);
-      await acknowledge(command==='resume' ? 'Moderation imewashwa. Nitachunguza ujumbe mpya kuanzia sasa.' : 'Moderation imesitishwa na admin. Tumia /resume kuiwasha.'); return true;
-    }
-    // Never attribute a channel's compatibility user to a real person.
-    const target=match[3]?.trim() || (!message.reply_to_message?.sender_chat && message.reply_to_message?.from?.id);
-    if(!userId(target) || !/^\d+$/.test(String(target))) {
-      await say(chat,`Reply kwa ujumbe wa mtumiaji au tumia /${command} USER_ID. Username pekee haitoshi kutambua mtu kwa uhakika.`); return true;
-    }
-    const state=await store.member(chat,target);
-    if(command==='strikes') { await say(chat,`Mtumiaji <code>${Number(target)}</code>: makosa ${state.strikes} kati ya 3 katika group hili.`); return true; }
-    if(command==='unban') {
-      // Telegram offers no idempotency key. Claim before unban so a lost response
-      // can never cause an old command to remove a later human/bot punishment.
-      await store.done(updateId,clock());
-      try { await api.call('unbanChatMember',{chat_id:chat,user_id:Number(target),only_if_banned:true}); }
-      catch {
-        await acknowledge('Kuondolewa kwa ban hakujathibitishwa. Admin kagua hali ya mtumiaji kwenye Telegram kabla ya kurudia amri.');
-        return true;
-      }
-      await store.override(chat,target,clock(),false);
-      await acknowledge('Ban imeondolewa. Mtumiaji anaweza kujiunga tena. Historia ya makosa imehifadhiwa.'); return true;
-    }
-    await store.override(chat,target,clock(),true,updateId);
-    await acknowledge('Historia ya makosa ya mtumiaji katika group hili imesafishwa. Tumia /unban ikiwa pia unataka kuondoa ban iliyopo.');
-    return true;
-  }
-
   async function membership(update) {
     const change=update.chat_member || update.my_chat_member;
     if(!change || !validId(change.chat?.id)) return;
@@ -113,7 +48,8 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000)}) 
       const own=change.new_chat_member;
       if(admin(own) && !admin(change.old_chat_member)) {
         await store.run('UPDATE groups SET activated_at=? WHERE chat_id=?',Number(change.date || clock()),String(chat));
-        await notice(chat,`<b>SautiLink Pilot imeongezwa.</b>\n${RULES}`);
+        const language=await store.getLanguage('group',chat);
+        await notice(chat,language==='en' ? ENGLISH_RULES : RULES,{reply_markup:{inline_keyboard:[[{text:language==='en' ? '✈️ Open Pilot' : '✈️ Fungua Pilot',url:`https://t.me/${bot.username}?start=home`}]]}});
       }
       return;
     }
@@ -139,11 +75,13 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000)}) 
     if(message.sender_chat && String(message.sender_chat.id)===String(info.linked_chat_id)) return 'linked_channel';
     const own=await member(chat,bot.id);
     if(!admin(own) || !own.can_delete_messages || !own.can_restrict_members) {
-      await notice(chat,'SautiLink Pilot inahitaji ruhusa za <b>Delete messages</b> na <b>Ban users</b> kabla ya kuanza moderation.');
+      const language=await store.getLanguage('group',chat);
+      await notice(chat,language==='en' ? '🛡 Pilot is waiting for an admin to finish its permissions. The private bot guide has the next steps.' : '🛡 Pilot inasubiri admin akamilishe ruhusa zake. Mwongozo unapatikana kwenye bot faraghani.');
       return 'missing_permissions';
     }
     if(message.chat.type!=='supergroup') {
-      await notice(chat,'Ban za saa 24 na siku 7 zinahitaji <b>supergroup</b>. Admin boresha group hili kuwa supergroup kabla ya moderation kuanza.');
+      const language=await store.getLanguage('group',chat);
+      await notice(chat,language==='en' ? '🛡 This group needs an admin to complete setup before timed moderation can begin. Open Pilot privately for guidance.' : '🛡 Group hili linahitaji admin akamilishe maandalizi kabla ya ban za muda kuanza. Fungua Pilot faraghani kwa mwongozo.');
       return 'requires_supergroup';
     }
     const incidentId=`${chat}:${message.media_group_id ? `album:${message.media_group_id}` : `message:${message.message_id}`}`;
@@ -151,12 +89,14 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000)}) 
       // Telegram does not disclose the person behind unrelated channel senders.
       // banChatSenderChat is permanent and wider than the requested timed policy.
       let row=await store.incident(incidentId);
-      if(row?.status==='channel_review') { await deleteMessage(message); return 'channel_review'; }
+      if(row?.status==='channel_review') {
+        await deleteMessage(message);
+        return await announcer.notify(row,message,false) ? 'notification_pending' : 'channel_review';
+      }
       row=await store.plan({id:incidentId,chat_id:chat,user_id:null,message_id:message.message_id,event_at:time,created_at:now,strike:0,until_date:0,reasons:JSON.stringify(violation.reasons)});
       await deleteMessage(message);
       await store.status(row.id,'channel_review');
-      await notifyIncident(row,message,false);
-      return 'channel_review';
+      return await announcer.notify(row,message,false) ? 'notification_pending' : 'channel_review';
     }
     if(!userId(message.from?.id)) return 'unknown_sender';
     const user=message.from.id;
@@ -174,10 +114,14 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000)}) 
     if(row && ['ban_sent','uncertain','confirmed'].includes(row.status)) {
       if(message.message_id!==row.message_id) await deleteMessage(message);
       const matches=live.status==='kicked' && Number(live.until_date || 0)===Number(row.until_date);
-      if(!matches) { await store.status(row.id,'review'); return 'review'; }
+      if(!matches) {
+        await store.status(row.id,'review');
+        await store.ensureExtras();
+        await store.run("UPDATE notification_delivery SET status='cancelled',error_kind='membership_changed',updated_at=? WHERE incident_id=? AND status='pending'",clock(),row.id);
+        return 'review';
+      }
       if(row.status!=='confirmed') await store.confirm(row,now);
-      await notifyIncident(row,message);
-      return 'confirmed';
+      return await announcer.notify(row,message) ? 'notification_pending' : 'confirmed';
     }
     if(live.status==='kicked') { await deleteMessage(message); return 'already_banned'; }
     // queued messages from the same offence episode cannot escalate the punishment.
@@ -214,32 +158,36 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000)}) 
     }
     await store.confirm(row,now);
     // Observe an immediate human override before announcing a continuing ban.
-    live=await member(chat,user);
-    if(live.status!=='kicked' || Number(live.until_date || 0)!==row.until_date) {
+    // banChatMember already confirmed the completed action. A failed secondary
+    // read must not discard its announcement; a verified human override still wins.
+    let after;
+    try { after=await member(chat,user); } catch { /* Preserve the confirmed action. */ }
+    if(after && (after.status!=='kicked' || Number(after.until_date || 0)!==row.until_date)) {
       await store.override(chat,user,clock()); return 'admin_override';
     }
-    await notifyIncident(row,message);
-    return 'confirmed';
+    return await announcer.notify(row,message) ? 'notification_pending' : 'confirmed';
   }
 
   async function handle(update) {
     if(!Number.isSafeInteger(update?.update_id)) return {status:'ignored'};
     if(await store.seen(update.update_id)) return {status:'duplicate'};
     let status='ignored';
-    if(update.chat_member || update.my_chat_member) {
+    if(update.callback_query) {
+      await experience.handleCallback(update.callback_query,update.update_id); status='callback';
+    } else if(update.chat_member || update.my_chat_member) {
       await membership(update); status='membership';
     } else {
       const message=update.message || update.edited_message;
       if(message && validId(message.chat?.id) && Number.isSafeInteger(message.message_id)) {
         // An edit is re-evaluated for violations but can never re-run an admin command.
         const groupViolation=['group','supergroup'].includes(message.chat.type) && analyzeMessage(message).reasons.length>0;
-        if(update.message && !groupViolation && await handleCommand(message,update.update_id)) status='command';
+        if(update.message && !groupViolation && await experience.handleCommand(message,update.update_id)) status='command';
         else status=await enforce(message,update);
       }
     }
     // A ban can succeed while its HTTP response is lost. Telegram must retry
     // this update so we can reconcile membership without issuing another ban.
-    if(status==='uncertain') return {status,retry:true};
+    if(status==='uncertain' || status==='notification_pending') return {status,retry:true};
     await store.done(update.update_id,clock());
     return {status};
   }

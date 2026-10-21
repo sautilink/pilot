@@ -1,6 +1,7 @@
 import { applySchema, createStore } from './store.js';
 import { createTelegram, secureEqual, webhookSecret } from './telegram.js';
 import { renderHome, renderSetup, renderPrivacy } from './pages.js';
+import { isExpectedBot, syncExperience } from './experience-sync.js';
 
 const SECURITY_HEADERS={
   'X-Content-Type-Options':'nosniff',
@@ -16,6 +17,28 @@ function response(body,status=200,type='application/json; charset=utf-8') {
 const html=body=>response(body,200,'text/html; charset=utf-8');
 const error=(message,status)=>response({ok:false,message},status);
 const validToken=value=>/^\d+:[A-Za-z0-9_-]{20,}$/.test(value || '');
+const SETUP_MESSAGES={
+  sw:{
+    authorization:'SETUP_KEY si sahihi au haijawekwa kama Secret yenye angalau herufi 32.',
+    origin:'Origin hairuhusiwi.',database:'Ongeza D1 database binding yenye jina DB kwenye Worker.',
+    groups:'Deploy repo ili kuunda GROUPS Durable Object binding.',
+    token:'Weka token ya BotFather kwenye Secret inayoitwa BOT_TOKEN.',
+    identity:'BOT_TOKEN ni ya bot tofauti na BOT_USERNAME. Thibitisha token ya @sautilinkpilotbot.',
+    incomplete:'Usanidi wa Telegram haujakamilika. Jaribu tena baada ya muda mfupi.',
+    connected:'SautiLink Pilot imeunganishwa na Telegram.',
+    failed:'Hatua haijakamilika. Kagua binding/Secrets na ujaribu tena.',
+  },
+  en:{
+    authorization:'SETUP_KEY is missing or incorrect. Configure it as a Secret with at least 32 characters.',
+    origin:'This origin is not allowed.',database:'Add a D1 database binding named DB to the Worker.',
+    groups:'Deploy the repository to create the GROUPS Durable Object binding.',
+    token:'Store the BotFather token in a Secret named BOT_TOKEN.',
+    identity:'BOT_TOKEN belongs to a different bot than BOT_USERNAME. Verify the token for @sautilinkpilotbot.',
+    incomplete:'Telegram setup is incomplete. Try again shortly.',
+    connected:'SautiLink Pilot is connected to Telegram.',
+    failed:'The operation could not be completed. Check the bindings and Secrets, then try again.',
+  },
+};
 
 async function publicState(env) {
   try {
@@ -36,13 +59,14 @@ function baseUrl(env) {
   return url.origin;
 }
 
-async function setup(request,env) {
-  if(!await authorize(request,env)) return error('SETUP_KEY si sahihi au haijawekwa kama Secret yenye angalau herufi 32.',401);
+async function setup(request,env,lang='sw') {
+  const messages=SETUP_MESSAGES[lang==='en' ? 'en' : 'sw'];
+  if(!await authorize(request,env)) return error(messages.authorization,401);
   const origin=request.headers.get('Origin');
-  if(origin && origin!==baseUrl(env)) return error('Origin hairuhusiwi.',403);
-  if(!env.DB) return error('Ongeza D1 database binding yenye jina DB kwenye Worker.',503);
-  if(!env.GROUPS) return error('Deploy repo ili kuunda GROUPS Durable Object binding.',503);
-  if(!validToken(env.BOT_TOKEN)) return error('Weka token ya BotFather kwenye Secret inayoitwa BOT_TOKEN.',503);
+  if(origin && origin!==baseUrl(env)) return error(messages.origin,403);
+  if(!env.DB) return error(messages.database,503);
+  if(!env.GROUPS) return error(messages.groups,503);
+  if(!validToken(env.BOT_TOKEN)) return error(messages.token,503);
   const api=createTelegram(env.BOT_TOKEN);
   if(request.method==='GET') {
     const state=await publicState(env);
@@ -51,45 +75,34 @@ async function setup(request,env) {
       status:{pending_updates:webhook.pending_update_count,last_error:webhook.last_error_message || null,allowed_updates:webhook.allowed_updates || []}});
   }
   const identity=await api.call('getMe');
-  if(!identity.is_bot || !identity.username || identity.username.toLowerCase()!==String(env.BOT_USERNAME || 'sautilinkpilotbot').toLowerCase()) {
-    return error('BOT_TOKEN ni ya bot tofauti na BOT_USERNAME. Thibitisha token ya @sautilinkpilotbot.',409);
+  if(!isExpectedBot(identity,env.BOT_USERNAME || 'sautilinkpilotbot')) {
+    return error(messages.identity,409);
   }
   await applySchema(env.DB);
   const store=createStore(env.DB);
   const firstActivation=await store.setting('ready_since');
-  const shared=[
-    {command:'start',description:'Anza kutumia SautiLink Pilot'},
-    {command:'help',description:'Msaada wa kutumia bot'},
-    {command:'rules',description:'Sheria na links zinazoruhusiwa'}
-  ];
-  await api.call('setMyCommands',{commands:shared});
-  await api.call('setMyCommands',{scope:{type:'all_chat_administrators'},commands:[...shared,
-    {command:'status',description:'Hali ya moderation na ruhusa'},
-    {command:'strikes',description:'Angalia makosa: reply au user ID'},
-    {command:'forgive',description:'Safisha makosa: reply au user ID'},
-    {command:'unban',description:'Ondoa ban bila kufuta historia'},
-    {command:'pause',description:'Sitisha moderation ya group hili'},
-    {command:'resume',description:'Washa moderation ya group hili'}
-  ]});
   const url=`${baseUrl(env)}/telegram/webhook`;
-  await api.call('setWebhook',{
-    url,secret_token:await webhookSecret(env.BOT_TOKEN),max_connections:40,
-    allowed_updates:['message','edited_message','my_chat_member','chat_member'],drop_pending_updates:false
+  const synced=await syncExperience({
+    db:env.DB,token:env.BOT_TOKEN,api,webhookUrl:url,
+    expectedUsername:env.BOT_USERNAME || 'sautilinkpilotbot',force:true,
   });
+  if(synced.status!=='synced') return error(messages.incomplete,503);
   await store.settings({ready:'1',bot_id:identity.id,bot_username:identity.username,ready_since:firstActivation || Math.floor(Date.now()/1000),schema_version:'1'});
-  return response({ok:true,ready:true,username:identity.username,webhook_url:url,database:'ready',status:'SautiLink Pilot imeunganishwa na Telegram.'});
+  return response({ok:true,ready:true,username:identity.username,webhook_url:url,database:'ready',status:messages.connected});
 }
 
-export async function handleFetch(request,env) {
+export async function handleFetch(request,env,ctx) {
+  let lang='sw';
   try {
     const url=new URL(request.url),path=url.pathname;
-    if(request.method==='GET' && path==='/') return html(renderHome(await publicState(env)));
-    if(request.method==='GET' && path==='/privacy') return html(renderPrivacy());
-    if(request.method==='GET' && path==='/setup') return html(renderSetup());
+    lang=url.searchParams.get('lang')==='en' ? 'en' : 'sw';
+    if(request.method==='GET' && path==='/') return html(renderHome({...await publicState(env),lang}));
+    if(request.method==='GET' && path==='/privacy') return html(renderPrivacy(lang));
+    if(request.method==='GET' && path==='/setup') return html(renderSetup(lang));
     if(request.method==='GET' && path==='/health') {
       const {ready}=await publicState(env); return response({ok:ready,service:'SautiLink Pilot'},ready ? 200 : 503);
     }
-    if((path==='/api/setup' && request.method==='POST') || (path==='/api/setup/status' && request.method==='GET')) return await setup(request,env);
+    if((path==='/api/setup' && request.method==='POST') || (path==='/api/setup/status' && request.method==='GET')) return await setup(request,env,lang);
     if(path!=='/telegram/webhook') return error('Haijapatikana.',404);
     if(request.method!=='POST') return error('Tumia POST.',405);
     if(!validToken(env.BOT_TOKEN) || !env.DB || !env.GROUPS) return error('Bot bado haijaunganishwa.',503);
@@ -101,9 +114,28 @@ export async function handleFetch(request,env) {
     if(!Number.isSafeInteger(update?.update_id)) return error('Update si sahihi.',400);
     if(!(await publicState(env)).ready) return error('Kamilisha setup kwanza.',503);
     const event=update.message || update.edited_message || update.my_chat_member || update.chat_member;
-    if(!event || !Number.isSafeInteger(event.chat?.id)) return response({ok:true});
+    const callback=update.callback_query;
+    const accessibleCallbackChat=callback?.message?.date!==0 && Number.isSafeInteger(callback?.message?.chat?.id);
+    const callbackChat=accessibleCallbackChat ? callback.message.chat.id : callback?.from?.id;
+    const chatId=callback ? callbackChat : event?.chat?.id;
+    if(!Number.isSafeInteger(chatId) || chatId===0 || (callback && !accessibleCallbackChat && chatId<0)) return response({ok:true});
+    // Upgrade metadata only on authenticated, valid updates for an already-ready
+    // installation. Public GETs and failed authentication cannot mutate Telegram.
+    // Await callback subscription first; profile/menu updates finish in waitUntil.
+    if(typeof ctx?.waitUntil==='function') {
+      try {
+        await syncExperience({
+          db:env.DB,token:env.BOT_TOKEN,webhookUrl:`${baseUrl(env)}/telegram/webhook`,
+          expectedUsername:env.BOT_USERNAME || 'sautilinkpilotbot',
+          waitUntil:promise=>ctx.waitUntil(promise),
+        });
+      } catch {
+        // Metadata availability must not block moderation of this update.
+        console.warn('pilot_experience_sync_failed',{stage:'webhook_trigger',kind:'sync_unavailable'});
+      }
+    }
     // Same group -> same object. Its queue protects strikes across network awaits.
-    const id=env.GROUPS.idFromName(String(event.chat.id));
+    const id=env.GROUPS.idFromName(String(chatId));
     const result=await env.GROUPS.get(id).fetch('https://internal/telegram',{
       method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(update)
     });
@@ -111,6 +143,6 @@ export async function handleFetch(request,env) {
   } catch(errorValue) {
     // Do not log an error stack or outbound URL (Telegram URLs contain BOT_TOKEN).
     console.error('pilot_request_failed',{type:errorValue?.name || 'Error'});
-    return error('Hatua haijakamilika. Kagua binding/Secrets na ujaribu tena.',503);
+    return error(SETUP_MESSAGES[lang].failed,503);
   }
 }

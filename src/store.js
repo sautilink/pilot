@@ -1,5 +1,21 @@
 // D1 is the source of truth; a Durable Object serializes each chat's actions.
 // Message bodies, captions, links and Telegram tokens are never persisted here.
+export const EXPERIENCE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS notification_delivery (
+  incident_id TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+  retry_at INTEGER NOT NULL DEFAULT 0, error_kind TEXT,
+  telegram_message_id INTEGER, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  user_id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS language_preferences (
+  scope TEXT NOT NULL, subject_id TEXT NOT NULL,
+  language TEXT NOT NULL CHECK(language IN ('sw','en')), updated_at INTEGER NOT NULL,
+  PRIMARY KEY(scope,subject_id)
+);
+`;
 export const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS groups (
@@ -25,7 +41,7 @@ CREATE TABLE IF NOT EXISTS processed_updates (
   update_id INTEGER PRIMARY KEY, processed_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS processed_age ON processed_updates(processed_at);
-`;
+` + EXPERIENCE_SCHEMA_SQL;
 
 export async function applySchema(db) {
   const statements = SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean);
@@ -35,8 +51,10 @@ export async function applySchema(db) {
 export function createStore(db) {
   const run = (sql, ...args) => db.prepare(sql).bind(...args).run();
   const first = (sql, ...args) => db.prepare(sql).bind(...args).first();
+  let extras;
+  const ensureExtras = () => extras ||= db.batch(EXPERIENCE_SCHEMA_SQL.split(';').map(s=>s.trim()).filter(Boolean).map(sql=>db.prepare(sql))).catch(error=>{ extras=null; throw error; });
   return {
-    run, first,
+    run, first, ensureExtras,
     async setting(key) { return (await first('SELECT value FROM settings WHERE key = ?', key))?.value ?? null; },
     async settings(values) {
       await db.batch(Object.entries(values).map(([k,v]) => db.prepare(
@@ -68,24 +86,65 @@ export function createStore(db) {
       ]);
     },
     async override(chat,user,at,reset=false,updateId=null) {
+      await ensureExtras();
       await this.member(chat,user);
       const changes=[
         db.prepare(`UPDATE members SET ${reset ? 'strikes=0,' : ''} active_until=CASE WHEN episode_at<=? THEN 0 ELSE active_until END,override_at=MAX(override_at,?) WHERE chat_id=? AND user_id=?`)
           .bind(at,at,String(chat),String(user)),
         db.prepare("UPDATE incidents SET status='cancelled' WHERE chat_id=? AND user_id=? AND event_at<=? AND status!='cancelled'")
-          .bind(String(chat),String(user),at)
+          .bind(String(chat),String(user),at),
+        db.prepare("UPDATE notification_delivery SET status='cancelled',error_kind='admin_override',updated_at=? WHERE status='pending' AND incident_id IN (SELECT id FROM incidents WHERE chat_id=? AND user_id=? AND event_at<=?)")
+          .bind(at,String(chat),String(user),at)
       ];
       if(updateId!==null) changes.push(db.prepare('INSERT OR IGNORE INTO processed_updates VALUES(?,?)').bind(updateId,at));
       await db.batch(changes);
     },
-    async claimNotice(id) {
-      const result=await run('UPDATE incidents SET notified=1 WHERE id=? AND notified=0',id);
+    async noticeRecord(id,now) {
+      await ensureExtras();
+      // Existing notified=1 records are legacy claims, not proof of delivery.
+      // Do not replay them: Telegram may already have received the old notice.
+      await db.batch([
+        db.prepare("INSERT OR IGNORE INTO notification_delivery(incident_id,updated_at) SELECT id,? FROM incidents WHERE id=? AND notified=0").bind(now,id),
+        db.prepare('UPDATE incidents SET notified=1 WHERE id=? AND EXISTS(SELECT 1 FROM notification_delivery WHERE incident_id=?)').bind(id,id)
+      ]);
+      return first('SELECT * FROM notification_delivery WHERE incident_id=?',id);
+    },
+    async startNoticeAttempt(id,now) {
+      const result=await run("UPDATE notification_delivery SET status='sending',attempts=attempts+1,updated_at=? WHERE incident_id=? AND status='pending' AND retry_at<=?",now,id,now);
       return (result.meta?.changes ?? result.changes ?? 0)>0;
     },
+    noticeState(id,status,now,{retryAt=0,errorKind=null,messageId=null}={}) {
+      return run('UPDATE notification_delivery SET status=?,retry_at=?,error_kind=?,telegram_message_id=?,updated_at=? WHERE incident_id=?',status,retryAt,errorKind,messageId,now,id);
+    },
+    async latestNotice(chat) {
+      await ensureExtras();
+      return first('SELECT n.* FROM notification_delivery n JOIN incidents i ON i.id=n.incident_id WHERE i.chat_id=? ORDER BY n.updated_at DESC,i.created_at DESC,i.rowid DESC LIMIT 1',String(chat));
+    },
+    async setAdminContext(user,chat,now) {
+      await ensureExtras();
+      return run('INSERT INTO admin_sessions(user_id,chat_id,updated_at) VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET chat_id=excluded.chat_id,updated_at=excluded.updated_at',String(user),String(chat),now);
+    },
+    async adminContext(user) {
+      await ensureExtras();
+      return first('SELECT chat_id,updated_at FROM admin_sessions WHERE user_id=?',String(user));
+    },
+    async clearAdminContext(user) { await ensureExtras(); return run('DELETE FROM admin_sessions WHERE user_id=?',String(user)); },
+    async getLanguage(scope,id,fallback='sw') {
+      await ensureExtras();
+      return (await first('SELECT language FROM language_preferences WHERE scope=? AND subject_id=?',scope,String(id)))?.language || (fallback==='en' ? 'en' : 'sw');
+    },
+    async setLanguage(scope,id,language,now) {
+      if(!['user','group'].includes(scope) || !['sw','en'].includes(language)) throw new Error('Invalid language preference');
+      await ensureExtras();
+      return run('INSERT INTO language_preferences(scope,subject_id,language,updated_at) VALUES(?,?,?,?) ON CONFLICT(scope,subject_id) DO UPDATE SET language=excluded.language,updated_at=excluded.updated_at',scope,String(id),language,now);
+    },
     async cleanup(now) {
+      await ensureExtras();
       // 7 days exceeds Telegram's update retention; stale messages are never enforced.
       await db.batch([
         db.prepare('DELETE FROM processed_updates WHERE processed_at < ?').bind(now-7*86400),
+        db.prepare('DELETE FROM notification_delivery WHERE incident_id IN (SELECT id FROM incidents WHERE created_at < ?)').bind(now-30*86400),
+        db.prepare('DELETE FROM admin_sessions WHERE updated_at < ?').bind(now-30*86400),
         db.prepare('DELETE FROM incidents WHERE created_at < ?').bind(now-30*86400)
       ]);
     }

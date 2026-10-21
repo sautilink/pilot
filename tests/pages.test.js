@@ -22,8 +22,8 @@ test('public rules explain the agreed exceptions and consequential Telegram limi
   assert.match(page, /family=Inter/);
 });
 
-function setupHarness(response = { ok: true, ready: true, username: 'sautilinkpilotbot' }) {
-  const html = renderSetup();
+function setupHarness(response = { ok: true, ready: true, username: 'sautilinkpilotbot' }, lang = 'sw') {
+  const html = renderSetup(lang);
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
   const ids = ['setup-form', 'setup-key', 'generated-key', 'feedback', 'key-feedback', 'setup-result', 'connect', 'check-status', 'copy-key', 'generate-key'];
   const elements = Object.fromEntries(ids.map(id => [id, { value: '', textContent: '', hidden: false, disabled: false, listeners: {}, classList: { toggle() {} }, addEventListener(event, handler) { this.listeners[event] = handler; }, reportValidity() { return true; }, focus() {}, select() {} }]));
@@ -96,9 +96,202 @@ test('failed status does not claim success or repeat the setup key', async () =>
   assert.equal(h.elements.connect.disabled, false);
 });
 
-test('privacy page describes per-group metadata without promising a retention period', () => {
+test('privacy page describes per-group metadata without claiming to archive conversations', () => {
   const page = renderPrivacy();
   assert.match(page, /haihifadhi nakala kamili za mazungumzo/);
   assert.match(page, /Historia hii hutenganishwa kwa kila group/);
   assert.match(page, /Telegram na Cloudflare/);
+});
+
+test('privacy discloses preferences, delivery records and retention in both languages', () => {
+  for (const [lang, phrases] of [
+    ['sw', ['chaguo la lugha', 'group alilochagua mwisho', 'ID ya ujumbe', 'bot hukagua upya', 'siku 7', 'siku 30', 'Idadi ya makosa hubaki mpaka admin aisafishe', 'haufuti matangazo yaliyotumwa Telegram']],
+    ['en', ['private-chat language choice', 'last group selected', 'message ID', 'the bot checks again', '7 days', '30 days', 'Strike counts remain until an admin resets them', 'Language choices and group settings are kept', 'does not delete announcements already sent to Telegram']],
+  ]) {
+    const page = renderPrivacy(lang);
+    for (const phrase of phrases) assert.ok(page.includes(phrase), phrase);
+    assert.doesNotMatch(page, /BOT_TOKEN|SETUP_KEY|notification_delivery|admin_sessions|\/api\//);
+  }
+});
+
+function simulatorHarness(lang = 'sw') {
+  const html = renderHome({ username: 'sautilinkpilotbot', ready: true, lang });
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const element = (dataset = {}) => ({
+    dataset, textContent: '', hidden: false, disabled: false, attributes: {}, listeners: {},
+    addEventListener(name, listener) { this.listeners[name] = listener; },
+    setAttribute(name, value) { this.attributes[name] = value; },
+  });
+  const elements = Object.fromEntries([...html.matchAll(/id="(sim-[a-z-]+)"/g)].map(match => [match[1], element()]));
+  const scenarios = ['blocked', 'allowed', 'forward', 'admin', 'linked'].map(scenario => element({ scenario }));
+  const groups = ['A', 'B'].map(simGroup => element({ simGroup }));
+  const stages = ['1', '2', '3'].map(stage => element({ stage }));
+  let calls = 0;
+  vm.runInNewContext(script, {
+    document: {
+      getElementById: id => elements[id],
+      querySelectorAll: selector => ({ '[data-scenario]': scenarios, '[data-sim-group]': groups, '[data-stage]': stages })[selector],
+    },
+    fetch() { calls += 1; throw new Error('The simulator must stay local'); },
+  });
+  return {
+    html, elements, stages, requests: () => calls,
+    scenario: name => scenarios.find(button => button.dataset.scenario === name).listeners.click(),
+    group: name => groups.find(button => button.dataset.simGroup === name).listeners.click(),
+    run: () => elements['sim-run'].listeners.click(),
+    reset: () => elements['sim-reset'].listeners.click(),
+  };
+}
+
+test('simulator separates groups and caps the repeated-offense demonstration at permanent', () => {
+  const h = simulatorHarness();
+  assert.equal(h.elements['sim-count'].textContent, '0 / 3');
+  h.run();
+  assert.equal(h.elements['sim-count'].textContent, '1 / 3');
+  assert.equal(h.elements['sim-outcome-title'].textContent, 'Ban ya saa 24.');
+  assert.match(h.elements['sim-step-note'].textContent, /ban ya awali imeisha/);
+  assert.match(h.elements['sim-announcement'].textContent, /\nSababu:/);
+  h.run();
+  assert.equal(h.elements['sim-outcome-title'].textContent, 'Ban ya siku 7.');
+  h.scenario('forward');
+  assert.equal(h.elements['sim-forward'].hidden, false);
+  h.run();
+  assert.equal(h.elements['sim-outcome-title'].textContent, 'Permanent ban.');
+  assert.equal(h.elements['sim-run'].disabled, true);
+  h.run();
+  assert.equal(h.elements['sim-count'].textContent, '3 / 3');
+  h.group('B');
+  assert.equal(h.elements['sim-count'].textContent, '0 / 3');
+  assert.equal(h.elements['sim-run'].disabled, false);
+  h.run();
+  assert.equal(h.elements['sim-count'].textContent, '1 / 3');
+  h.group('A');
+  assert.equal(h.elements['sim-count'].textContent, '3 / 3');
+  assert.equal(h.elements['sim-count-b'].textContent, '1/3');
+  assert.equal(h.requests(), 0);
+});
+
+test('simulator preserves strikes for whitelisted links, admins and linked channel examples', () => {
+  const h = simulatorHarness();
+  h.run();
+  for (const scenario of ['allowed', 'admin', 'linked']) {
+    h.scenario(scenario);
+    h.run();
+    assert.equal(h.elements['sim-outcome'].dataset.tone, 'allowed');
+    assert.equal(h.elements['sim-count'].textContent, '1 / 3');
+    assert.equal(h.elements['sim-announcement'].hidden, true);
+  }
+  assert.equal(h.elements['sim-forward'].hidden, false);
+  h.reset();
+  assert.equal(h.elements['sim-count-a'].textContent, '0/3');
+  assert.equal(h.elements['sim-count-b'].textContent, '0/3');
+  assert.equal(h.elements['sim-run'].disabled, false);
+  assert.equal(h.elements['sim-outcome'].dataset.tone, 'idle');
+  assert.equal(h.requests(), 0);
+});
+
+test('public visitor navigation hides owner setup and provides honest local demo and private bot guide', () => {
+  const h = simulatorHarness();
+  for (const anchor of ['jaribu', 'sheria', 'anza']) assert.ok(h.html.includes(`id="${anchor}"`));
+  assert.match(h.html, /href="https:\/\/t\.me\/sautilinkpilotbot"/);
+  assert.match(h.html, /Fungua menyu ya Pilot/);
+  assert.match(h.html, /https:\/\/github\.com\/sautilink\/pilot/);
+  assert.doesNotMatch(h.html, /href="\/setup|BOT_TOKEN|SETUP_KEY|D1 database|\/api\//);
+  assert.match(h.html, /prefers-reduced-motion:reduce/);
+  assert.match(h.html, /Haiunganishi Telegram/);
+  assert.doesNotMatch(h.html, /(?:localStorage|sessionStorage)/);
+});
+
+test('English navigation keeps the selected language and each selector stays on its current page', () => {
+  for (const [path, page] of [
+    ['/', renderHome({ username: 'sautilinkpilotbot', ready: true, lang: 'en' })],
+    ['/privacy', renderPrivacy('en')],
+    ['/setup', renderSetup('en')],
+  ]) {
+    assert.match(page, /<html lang="en">/);
+    assert.ok(page.includes(`href="${path}?lang=en" lang="en" hreflang="en" aria-label="English" aria-current="page">EN</a>`));
+    assert.ok(page.includes(`href="${path}?lang=sw" lang="sw" hreflang="sw" aria-label="Kiswahili">SW</a>`));
+    for (const href of ['/?lang=en', '/?lang=en#jaribu', '/?lang=en#sheria', '/?lang=en#anza', '/privacy?lang=en']) assert.ok(page.includes(`href="${href}"`), href);
+    assert.doesNotMatch(page, /(?:localStorage|sessionStorage)/);
+  }
+  const english = renderHome({ username: 'sautilinkpilotbot', ready: true, lang: 'en' });
+  assert.match(english, /https:\/\/t\.me\/sautilinkpilotbot\?startgroup=pilot/);
+  assert.match(english, /Open the Pilot menu/);
+  assert.doesNotMatch(english, /href="\/setup|BOT_TOKEN|SETUP_KEY|\/api\//);
+});
+
+test('English pages translate explanations and FAQs as well as headings', () => {
+  const home = renderHome({ lang: 'en' }).replace(/<script>[\s\S]*?<\/script>|<style>[\s\S]*?<\/style>/g, '');
+  for (const phrase of ['Your group.', 'Your Pilot.', 'Bot coming soon', 'Copy-pasted text and reuploaded media', 'The whitelist applies to links.', 'does not add them back automatically']) assert.ok(home.includes(phrase), phrase);
+  assert.match(home, /Their strike history in that group remains until an admin resets it/);
+  assert.match(home, /may also delete a member’s other messages/);
+  assert.match(home, /An offense in Group A does not start you at the second penalty in Group B/);
+  assert.match(home, /Example announcement · Not a real event/);
+  assert.doesNotMatch(home, /\?startgroup=|Group lako|Pilot wako|Chagua ujumbe|Maswali ya kawaida|Hapana\./);
+  const privacy = renderPrivacy('en');
+  assert.match(privacy, /does not store full copies of conversations/);
+  assert.match(privacy, /This history is separate for each group/);
+  assert.match(privacy, /Service operators can access moderation records/);
+  assert.match(privacy, /Telegram and Cloudflare/);
+});
+
+test('English demo translates messages, decisions and time progression without changing moderation', () => {
+  const h = simulatorHarness('en');
+  assert.equal(h.elements['sim-outcome-title'].textContent, 'What will Pilot do?');
+  assert.equal(h.elements['sim-message'].textContent, 'Join this offer:\nhttps://offers.example/today');
+  h.run();
+  assert.equal(h.elements['sim-outcome-title'].textContent, 'Banned for 24 hours.');
+  assert.equal(h.elements['sim-announcement'].textContent, 'Juma has been banned for 24 hours.\nReason: Posting an unapproved link.');
+  assert.match(h.elements['sim-step-note'].textContent, /previous ban has expired and Juma has rejoined/);
+  h.run();
+  assert.equal(h.elements['sim-outcome-title'].textContent, 'Banned for 7 days.');
+  h.scenario('forward');
+  assert.equal(h.elements['sim-forward'].textContent, 'Forwarded from example channel');
+  h.run();
+  assert.equal(h.elements['sim-outcome-title'].textContent, 'Permanent ban.');
+  assert.match(h.elements['sim-announcement'].textContent, /permanently\.\nReason: Posting a forwarded message\./);
+  assert.equal(h.elements['sim-run'].disabled, true);
+  h.group('B');
+  for (const [scenario, title] of [['allowed', 'Approved link. All clear.'], ['admin', 'Admins have permission.'], ['linked', 'Linked channel. All clear.']]) {
+    h.scenario(scenario);
+    h.run();
+    assert.equal(h.elements['sim-outcome-title'].textContent, title);
+    assert.equal(h.elements['sim-count'].textContent, '0 / 3');
+  }
+  assert.equal(h.requests(), 0);
+});
+
+test('English operator feedback preserves credential handling and key redaction', async () => {
+  const h = setupHarness(undefined, 'en');
+  assert.equal(h.requests.length, 0);
+  assert.match(h.html, /Generate a secure key/);
+  assert.match(h.html, /Connect Telegram/);
+  assert.doesNotMatch(h.html, /<input[^>]+name=/);
+  h.elements['setup-key'].value = 'too-short';
+  await h.elements['check-status'].listeners.click();
+  assert.equal(h.elements.feedback.textContent, 'SETUP_KEY must contain at least 32 characters.');
+  assert.equal(h.requests.length, 0);
+  h.elements['generate-key'].listeners.click();
+  assert.match(h.elements['key-feedback'].textContent, /A new key was generated in your browser/);
+  const key = h.elements['setup-key'].value;
+  await h.elements['setup-form'].listeners.submit({ preventDefault() {} });
+  assert.equal(h.requests[0].url, '/api/setup?lang=en');
+  assert.equal(h.requests[0].options.headers.Authorization, `Bearer ${key}`);
+  assert.equal(h.requests[0].options.body, '{}');
+  assert.equal(h.elements.feedback.textContent, 'The bot is connected. You can try it in a test supergroup.');
+  const failure = setupHarness({ ok: false, error: `Invalid key ${key}` }, 'en');
+  failure.elements['setup-key'].value = key;
+  await failure.elements['check-status'].listeners.click();
+  assert.equal(failure.requests[0].url, '/api/setup/status?lang=en');
+  assert.equal(failure.elements.feedback.textContent, 'Invalid key [secret]');
+});
+
+test('unknown or untrusted locale values fall back to Swahili without reflection', () => {
+  for (const lang of [undefined, 'fr', '\"><script>alert(1)</script>']) {
+    for (const page of [renderHome({ lang }), renderPrivacy(lang), renderSetup(lang)]) {
+      assert.match(page, /<html lang="sw">/);
+      assert.match(page, /aria-label="Kiswahili" aria-current="page">SW<\/a>/);
+      assert.doesNotMatch(page, /<script>alert\(1\)<\/script>|lang="fr"/);
+    }
+  }
 });
