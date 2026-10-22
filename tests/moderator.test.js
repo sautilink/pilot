@@ -617,3 +617,33 @@ test('a group configured for English receives its ban announcement entirely in E
   assert.doesNotMatch(notice.text, /tg:\/\/user\?id=/);
   assert.equal(f.api.callsOf('banChatMember').length, 1);
 });
+
+test('broadcast discovery includes quiet and paused groups, while removal events defeat older queued messages', async t => {
+  const f = await fixture(t);
+  const store = createStore(f.db);
+  await store.group(GROUP);
+  await store.run('UPDATE groups SET enabled=0 WHERE chat_id=?', String(GROUP));
+  const earlier = f.message({ text: 'Hello from a paused group' });
+  await f.moderator.handle(earlier);
+  assert.equal((await f.db.prepare('SELECT status FROM pilot_broadcast_groups WHERE chat_id=?').bind(String(GROUP)).first()).status, 'unknown');
+  f.advance(10);
+  await f.moderator.handle({ update_id: 901, my_chat_member: {
+    chat: { id: GROUP, type: 'supergroup' }, date: f.now(), from: { id: ADMIN_ID },
+    old_chat_member: { status: 'administrator', user: { id: BOT_ID } },
+    new_chat_member: { status: 'left', user: { id: BOT_ID } },
+  } });
+  await f.moderator.handle({ ...earlier, update_id: 902, message: { ...earlier.message, message_id: 902 } });
+  assert.equal((await f.db.prepare('SELECT status FROM pilot_broadcast_groups WHERE chat_id=?').bind(String(GROUP)).first()).status, 'disconnected');
+  assert.equal((await store.group(GROUP)).enabled, 0, 'connection discovery never resumes moderation');
+  assert.equal(f.api.callsOf('sendMessage').length, 0);
+});
+
+test('broadcast discovery follows group migration but does not target private chats or channels', async t => {
+  const f = await fixture(t);
+  await f.moderator.handle(f.message({ text: undefined, migrate_to_chat_id: OTHER_GROUP }));
+  const rows = (await f.db.prepare('SELECT chat_id,status FROM pilot_broadcast_groups ORDER BY chat_id').all()).results;
+  assert.deepEqual(rows, [{ chat_id: String(GROUP), status: 'disconnected' }, { chat_id: String(OTHER_GROUP), status: 'unknown' }]);
+  await f.moderator.handle(f.message({ text: 'Hello', chat: { id: USER_ID, type: 'private' } }));
+  await f.moderator.handle(f.message({ text: 'Channel update', chat: { id: LINKED_CHANNEL, type: 'channel' } }));
+  assert.equal((await f.db.prepare('SELECT COUNT(*) AS n FROM pilot_broadcast_groups').first()).n, 2);
+});

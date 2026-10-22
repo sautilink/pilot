@@ -5,6 +5,7 @@ import { createBotExperience } from './commands.js';
 import { createControlStore } from './control-store.js';
 import { createControlService } from './control-service.js';
 import { createGuardrails } from './guardrails.js';
+import { createBroadcastStore } from './broadcast-store.js';
 
 export const RULES = '<b>🛡 SautiLink Pilot</b>\nGroup lenye utulivu, mazungumzo yenye nafasi.\n\nLinks zisizoruhusiwa na ujumbe wa forward huondolewa.\nAdhabu: saa 24 → siku 7 → ban ya kudumu.\n\nTumia /rules kuona sheria za members, au fungua bot faraghani kwa mwongozo.';
 const ENGLISH_RULES = '<b>🛡 SautiLink Pilot</b>\nA calmer group. More room for conversation.\n\nUnapproved links and forwarded messages are removed.\nPenalties: 24 hours → 7 days → permanent ban.\n\nUse /rules for member rules, or open the bot privately for a guide.';
@@ -13,7 +14,7 @@ const validId = id => Number.isSafeInteger(Number(id)) && Number(id) !== 0;
 const userId = id => validId(id) && Number(id) > 0;
 const eventTime = m => Number(m.edit_date || m.date || 0);
 
-export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),dispatchControl,appUrl}) {
+export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),dispatchControl,appUrl,owner,dispatchBroadcast}) {
   const store=createStore(db);
   const controlStore=createControlStore(db),control=createControlService({db,api,clock});
   let identity;
@@ -24,7 +25,8 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
   const member=(chat,user)=>api.call('getChatMember',{chat_id:Number(chat),user_id:Number(user)});
   const announcer=createAnnouncer({store,api,clock,controlStore});
   const guards=createGuardrails({db,store,controlStore,api,clock,me,say});
-  const experience=createBotExperience({db,store,api,clock,me,say,control,controlStore,dispatchControl,appUrl});
+  const broadcastRecords=createBroadcastStore(db);
+  const experience=createBotExperience({db,store,api,clock,me,say,control,controlStore,dispatchControl,appUrl,owner,dispatchBroadcast});
 
   async function notice(chat,text,extra={}) {
     const group=await store.group(chat), now=clock();
@@ -49,9 +51,11 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
     const change=update.chat_member || update.my_chat_member;
     if(!change || !validId(change.chat?.id) || !['group','supergroup'].includes(change.chat.type)) return;
     const chat=change.chat.id, bot=await me();
+    if(chat<0) await broadcastRecords.rememberGroup(chat,Number(change.date || clock()));
     if(update.my_chat_member) {
       const group=await store.group(chat);
       const own=change.new_chat_member;
+      if(Number(own?.user?.id)===Number(bot.id)) await broadcastRecords.recordMembership(chat,own.status,Number(change.date || clock()),update.update_id);
       if(admin(own) && !admin(change.old_chat_member)) {
         await store.run('UPDATE groups SET activated_at=? WHERE chat_id=?',Number(change.date || clock()),String(chat));
         const language=await store.getLanguage('group',chat);
@@ -189,6 +193,8 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
       if(!await guards.callback(update.callback_query)) await experience.handleCallback(update.callback_query,update.update_id);
       status='callback';
     } else if(update.chat_join_request) {
+      const request=update.chat_join_request;
+      if(Number.isSafeInteger(request.chat?.id) && request.chat.id<0 && ['group','supergroup'].includes(request.chat.type)) await broadcastRecords.rememberGroup(request.chat.id,Number(request.date || clock()));
       status=await guards.joinRequest(update.chat_join_request);
     } else if(update.chat_member || update.my_chat_member) {
       await membership(update);
@@ -199,6 +205,16 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
       if(message && validId(message.chat?.id) && Number.isSafeInteger(message.message_id)) {
         // An edit is re-evaluated for violations but can never re-run an admin command.
         const isGroup=['group','supergroup'].includes(message.chat.type);
+        if(isGroup && message.chat.id<0) {
+          await broadcastRecords.rememberGroup(message.chat.id,eventTime(message));
+          if(Number.isSafeInteger(message.migrate_to_chat_id) && message.migrate_to_chat_id<0) {
+            await broadcastRecords.recordMembership(message.chat.id,'left',eventTime(message),update.update_id);
+            await broadcastRecords.rememberGroup(message.migrate_to_chat_id,eventTime(message));
+          }
+          if(Number.isSafeInteger(message.migrate_from_chat_id) && message.migrate_from_chat_id<0) {
+            await broadcastRecords.recordMembership(message.migrate_from_chat_id,'left',eventTime(message),update.update_id);
+          }
+        }
         const rules=isGroup ? await controlStore.rules(message.chat.id) : [];
         const groupViolation=isGroup && analyzeMessage(message,rules).reasons.length>0;
         let optionalAction=null;

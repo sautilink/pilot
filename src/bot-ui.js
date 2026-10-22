@@ -1,6 +1,6 @@
 import { escapeHtml } from './policy.js';
 
-export const EXPERIENCE_VERSION = '2026-10-22.1';
+export const EXPERIENCE_VERSION = '2026-10-22.2';
 export const BOT_DESCRIPTION = 'SautiLink Pilot husaidia kusimamia Telegram groups kwa sheria wazi, moderation ya links na forwards, na matangazo yenye sababu. Kagua link, ona matukio yako au tuma rufaa. Admin ana paneli ya faragha ya historia, mipangilio, takwimu na zana za ziada. Chagua Kiswahili au English uanze.';
 export const BOT_SHORT_DESCRIPTION = 'Msaidizi wa group: moderation, kikagua link, rufaa na paneli ya admin. Kiswahili / English.';
 
@@ -122,6 +122,7 @@ export function renderBotPage(page, context = {}) {
   if (['home', 'admin', 'status', 'help', 'connect'].includes(page)) rows.unshift([dashboardButton('sw', { appUrl: context.appUrl, chatId: context.groupId })]);
   if (page === 'home' || page === 'help') rows.splice(1, 0, [button('🔎 Kagua link', 'checklink'), button('📂 Matukio yangu', 'mystatus')]);
   if (page === 'admin' && context.groupId) rows.splice(1, 0, [button('📋 Historia', 'history'), button('📝 Rufaa', 'appeals')], [button('⚙ Mipangilio', 'settings'), button('▥ Takwimu', 'stats')]);
+  if (page === 'home' && context.isOwner === true) rows.push([button('📣 Updates za Pilot', 'bc:panel')]);
   if (page !== 'language') rows.push([button('🌐 Lugha / Language', 'language')]);
   return { text, reply_markup: { inline_keyboard: rows } };
 }
@@ -244,6 +245,7 @@ function renderEnglishPage(page, context) {
   if (['home', 'admin', 'status', 'help', 'connect'].includes(page)) rows.unshift([dashboardButton('en', { appUrl: context.appUrl, chatId: context.groupId })]);
   if (page === 'home' || page === 'help') rows.splice(1, 0, [button('🔎 Check a link', 'checklink'), button('📂 My cases', 'mystatus')]);
   if (page === 'admin' && context.groupId) rows.splice(1, 0, [button('📋 History', 'history'), button('📝 Appeals', 'appeals')], [button('⚙ Settings', 'settings'), button('▥ Statistics', 'stats')]);
+  if (page === 'home' && context.isOwner === true) rows.push([button('📣 Pilot updates', 'bc:panel')]);
   if (page !== 'language') rows.push([button('🌐 Language / Lugha', 'language')]);
   return { text, reply_markup: { inline_keyboard: rows } };
 }

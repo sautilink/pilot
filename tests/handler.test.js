@@ -6,6 +6,7 @@ import { applySchema, createStore } from '../src/store.js';
 import { TestD1 } from './helpers/d1.js';
 import { EXPERIENCE_VERSION } from '../src/bot-ui.js';
 import {createGuardrailStore} from '../src/guardrail-store.js';
+import {createOwnerAuth} from '../src/owner-auth.js';
 
 // Public fixtures only. These are not usable Telegram or Cloudflare credentials.
 const TOKEN = `900:${'test_only_'.repeat(4)}`;
@@ -71,6 +72,46 @@ function setupRequest({ key = KEY, origin = BASE, lang } = {}) {
     body: '{}',
   });
 }
+
+function pairRequest({ key = KEY, origin = BASE, body = { action: 'pair' } } = {}) {
+  return request('/api/setup/owner', { method: 'POST', headers: {
+    Authorization: `Bearer ${key}`, Origin: origin, 'Content-Type': 'application/json',
+  }, body: JSON.stringify(body) });
+}
+
+test('owner pairing requires the operator key, same origin and completed setup', async t => {
+  const f = await fixture(t);
+  assert.equal((await handleFetch(pairRequest({ key: 'wrong' }), f.env)).status, 401);
+  assert.equal((await handleFetch(pairRequest({ origin: 'https://attacker.example' }), f.env)).status, 403);
+  assert.equal((await handleFetch(pairRequest(), f.env)).status, 409);
+  assert.equal((await handleFetch(request('/api/setup/owner'), f.env)).status, 405);
+  assert.equal(f.calls.length, 0, 'pairing neither calls Telegram nor sends any message');
+});
+
+test('protected pairing issues a single-use code and public routes never expose its owner ID', async t => {
+  const f = await fixture(t, { ready: true });
+  assert.equal((await handleFetch(pairRequest({ body: { action: 'pair', ownerId: 666 } }), f.env)).status, 400);
+  const response = await handleFetch(pairRequest(), f.env);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  const result = await response.json();
+  assert.equal(result.owner.bound, false);
+  assert.match(result.pairing.command, /^\/claimowner [a-f0-9]{64}$/);
+  assert.equal((await handleFetch(pairRequest(), f.env)).status, 429);
+  const id = 8877665544;
+  await createOwnerAuth({ db: f.db }).claim({ id, chatId: id, chatType: 'private', username: 'drcharlestz', is_bot: false }, result.pairing.command.split(' ')[1]);
+  const status = await handleFetch(request('/api/setup/status', { headers: { Authorization: `Bearer ${KEY}`, Origin: BASE } }), f.env);
+  assert.deepEqual((await status.json()).owner, { bound: true, userId: String(id), expectedUsername: 'drcharlestz' });
+  const again = await handleFetch(pairRequest(), f.env);
+  assert.equal(again.status, 409);
+  assert.equal((await again.json()).error, 'owner_bound');
+  for (const path of ['/', '/privacy', '/setup', '/health', '/app']) {
+    const content = await (await handleFetch(request(path), f.env)).text();
+    assert.ok(!content.includes(String(id)), `${path} must not reveal the owner ID`);
+    assert.ok(!content.includes(result.pairing.command), `${path} must not reveal a pairing code`);
+  }
+  assert.equal(f.forwarded.length, 0, 'operator setup never initiates a campaign');
+});
 
 test('health is unavailable before configuration and never claims an active bot', async () => {
   const response = await handleFetch(request('/health'), {});

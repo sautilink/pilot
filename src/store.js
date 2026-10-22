@@ -1,8 +1,10 @@
 import {CONTROL_SCHEMA_SQL} from './control-store.js';
 import {GUARDRAIL_SCHEMA_SQL} from './guardrail-store.js';
+import {OWNER_SCHEMA_SQL} from './owner-auth.js';
+import {BROADCAST_SCHEMA_SQL} from './broadcast-store.js';
 
 // D1 is the source of truth; a Durable Object serializes each chat's actions.
-// Message bodies, captions, links and Telegram tokens are never persisted here.
+// Moderated message bodies, captions and Telegram tokens are never persisted.
 export const EXPERIENCE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS notification_delivery (
   incident_id TEXT PRIMARY KEY,
@@ -44,7 +46,7 @@ CREATE TABLE IF NOT EXISTS processed_updates (
   update_id INTEGER PRIMARY KEY, processed_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS processed_age ON processed_updates(processed_at);
-` + EXPERIENCE_SCHEMA_SQL + CONTROL_SCHEMA_SQL + GUARDRAIL_SCHEMA_SQL;
+` + EXPERIENCE_SCHEMA_SQL + CONTROL_SCHEMA_SQL + GUARDRAIL_SCHEMA_SQL + OWNER_SCHEMA_SQL + BROADCAST_SCHEMA_SQL;
 
 export async function applySchema(db) {
   const statements = SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean);

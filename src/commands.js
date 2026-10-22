@@ -1,6 +1,7 @@
 import { escapeHtml } from './policy.js';
 import { renderBotPage } from './bot-ui.js';
 import { createFeatureCommands, FEATURE_COMMANDS, ADMIN_FEATURE_COMMANDS } from './feature-commands.js';
+import { createBroadcastCommands } from './broadcast-commands.js';
 
 const isAdmin = member => member?.status === 'creator' || member?.status === 'administrator';
 const validId = value => Number.isSafeInteger(Number(value)) && Number(value) !== 0;
@@ -121,7 +122,7 @@ function noticeSummary(notice, language) {
   return summary + detail;
 }
 
-export function createBotExperience({ db, store, api, clock = () => Math.floor(Date.now() / 1000), me, say, control, controlStore, dispatchControl, appUrl = 'https://pilot.sautilink.com/app' }) {
+export function createBotExperience({ db, store, api, clock = () => Math.floor(Date.now() / 1000), me, say, control, controlStore, dispatchControl, owner, dispatchBroadcast, appUrl = 'https://pilot.sautilink.com/app' }) {
   const member = (chat, user) => api.call('getChatMember', { chat_id: Number(chat), user_id: Number(user) });
   const identity = me || (() => api.call('getMe'));
   const send = say || ((chat, text, extra = {}) => api.call('sendMessage', {
@@ -134,6 +135,7 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
   const replyLanguage = message => !anonymous(message) && userId(message.from?.id) ? userLanguage(message.from) : groupLanguage(message.chat.id);
   const context = (bot, from, language) => ({ username: bot.username, firstName: from?.first_name, language, appUrl });
   const features = createFeatureCommands({ store, control, dispatchControl, appUrl });
+  const broadcasts = createBroadcastCommands({ store, api, owner, dispatchBroadcast, clock, me: identity, send });
   const link = (bot, chat) => {
     const name = /^[A-Za-z0-9_]{5,32}$/.test(bot.username || '') ? bot.username : 'sautilinkpilotbot';
     return `https://t.me/${name}?start=${chat == null ? 'home' : `manage_${chat}`}`;
@@ -239,7 +241,14 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     return quietSend(message.chat.id, view.text, { reply_markup: view.reply_markup });
   }
 
+  async function privatePage(page, bot, from, language) {
+    const view = context(bot, from, language);
+    if (page === 'home' && await broadcasts.isOwner(from)) view.isOwner = true;
+    return renderBotPage(page, view);
+  }
+
   async function handleCommand(message, updateId) {
+    if (await broadcasts.handleMessage(message, updateId)) return true;
     const match = String(message.text || '').match(commandPattern);
     if (!match) return false;
     const bot = await identity(), command = match[1].toLowerCase(), argument = match[3]?.trim();
@@ -285,7 +294,7 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
         const page = command === 'start'
           ? (argument === 'howitworks' ? 'how' : publicStartPages.has(argument) ? argument : 'home')
           : pages[command];
-        if (peer(message)) await sendPage(message, renderBotPage(page, context(bot, message.from, language)));
+        if (peer(message)) await sendPage(message, await privatePage(page, bot, message.from, language));
       } else if (isGroup(message.chat)) {
         if (command === 'rules') {
           let rules = renderBotPage('rules', context(bot, null, language)).text;
@@ -414,6 +423,7 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
   }
 
   async function handleCallback(query, updateId) {
+    if (await broadcasts.handleCallback(query, updateId)) return true;
     const match = String(query?.data || '').match(/^pilot:([a-z]+)(?::(sw|en))?$/);
     if (!match || (match[1] === 'lang' ? !match[2] : match[2] || !callbackPages.has(match[1]))) return false;
     // Stop Telegram's spinner before any group authorization/network lookup.
@@ -439,7 +449,7 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     } else if (match[1] === 'admin' || match[1] === 'status') {
       const choice = await selected(query.from.id, bot, query.from, language);
       view = choice.page || await adminPage(match[1], bot, query.from, choice.chat, language);
-    } else view = renderBotPage(match[1], context(bot, query.from, language));
+    } else view = await privatePage(match[1], bot, query.from, language);
     try {
       await api.call('editMessageText', {
         chat_id: message.chat.id, message_id: message.message_id, text: view.text,

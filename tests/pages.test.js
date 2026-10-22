@@ -25,13 +25,16 @@ test('public rules explain the agreed exceptions and consequential Telegram limi
 function setupHarness(response = { ok: true, ready: true, username: 'sautilinkpilotbot' }, lang = 'sw') {
   const html = renderSetup(lang);
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
-  const ids = ['setup-form', 'setup-key', 'generated-key', 'feedback', 'key-feedback', 'setup-result', 'connect', 'check-status', 'copy-key', 'generate-key'];
+  const ids = ['setup-form', 'setup-key', 'generated-key', 'feedback', 'key-feedback', 'setup-result', 'connect', 'check-status', 'copy-key', 'generate-key', 'owner-check', 'owner-pair', 'owner-feedback', 'owner-bound', 'owner-next', 'owner-pairing', 'owner-command', 'owner-expiry', 'owner-copy'];
   const elements = Object.fromEntries(ids.map(id => [id, { value: '', textContent: '', hidden: false, disabled: false, listeners: {}, classList: { toggle() {} }, addEventListener(event, handler) { this.listeners[event] = handler; }, reportValidity() { return true; }, focus() {}, select() {} }]));
   const requests = [];
   const clipboard = [];
-  const context = { document: { getElementById: id => elements[id] }, crypto: webcrypto, Uint8Array, Array, JSON, String, Error, Boolean, AbortSignal, navigator: { clipboard: { writeText: async value => clipboard.push(value) } }, fetch: async (url, options) => { requests.push({ url, options }); return { ok: response.ok !== false, status: response.ok === false ? 401 : 200, json: async () => response }; } };
+  const timers = [];
+  let currentResponse = response;
+  for (const id of ['owner-pair', 'owner-bound', 'owner-next', 'owner-pairing']) elements[id].hidden = true;
+  const context = { document: { getElementById: id => elements[id] }, crypto: webcrypto, Uint8Array, Array, JSON, String, Error, Boolean, AbortSignal, navigator: { clipboard: { writeText: async value => clipboard.push(value) } }, setTimeout(handler, delay) { const timer = { handler, delay, cleared: false }; timers.push(timer); return timer; }, clearTimeout(timer) { timer.cleared = true; }, fetch: async (url, options) => { requests.push({ url, options }); return { ok: currentResponse.ok !== false, status: currentResponse.httpStatus || (currentResponse.ok === false ? 401 : 200), json: async () => currentResponse }; } };
   vm.runInNewContext(script, context);
-  return { elements, requests, clipboard, html };
+  return { elements, requests, clipboard, timers, html, setResponse(value) { currentResponse = value; } };
 }
 
 test('setup is inert on load and never requests a Telegram token through the browser', () => {
@@ -94,6 +97,89 @@ test('failed status does not claim success or repeat the setup key', async () =>
   assert.match(h.elements.feedback.textContent, /Invalid key \[siri\]/);
   assert.doesNotMatch(h.elements.feedback.textContent, /imeunganishwa/);
   assert.equal(h.elements.connect.disabled, false);
+});
+
+test('owner pairing is explicit, authenticated and keeps the one-use command out of URLs and request bodies', async () => {
+  const owner = { bound: false, expectedUsername: 'drcharlestz' };
+  const h = setupHarness({ ok: true, ready: true, owner }, 'en');
+  assert.equal(h.elements['owner-pair'].hidden, true);
+  assert.equal(h.elements['owner-command'].value, '');
+  assert.equal(h.requests.length, 0);
+  const key = 'operator-key-'.repeat(5);
+  const command = '/claimowner public_test_pairing_code_1234567890';
+  h.elements['setup-key'].value = key;
+  await h.elements['owner-check'].listeners.click();
+  assert.equal(h.requests[0].url, '/api/setup/status?lang=en');
+  assert.equal(h.elements['owner-pair'].hidden, false);
+  h.setResponse({ ok: true, owner, pairing: { command, expiresAt: Math.floor(Date.now() / 1000) + 600, username: 'drcharlestz' } });
+  await h.elements['owner-pair'].listeners.click();
+  const request = h.requests[1];
+  assert.equal(request.url, '/api/setup/owner?lang=en');
+  assert.equal(request.options.method, 'POST');
+  assert.equal(request.options.headers.Authorization, `Bearer ${key}`);
+  assert.equal(request.options.body, JSON.stringify({ action: 'pair' }));
+  assert.equal(request.options.credentials, 'omit');
+  assert.equal(request.options.cache, 'no-store');
+  assert.equal(request.options.redirect, 'error');
+  assert.equal(h.elements['owner-command'].value, command);
+  assert.equal(h.elements['owner-pairing'].hidden, false);
+  assert.match(h.elements['owner-expiry'].textContent, /10 minutes/);
+  assert.match(h.elements['owner-feedback'].textContent, /@drcharlestz/);
+  assert.ok(h.timers[0].delay > 0 && h.timers[0].delay <= 600000);
+  await h.elements['owner-copy'].listeners.click();
+  assert.deepEqual(h.clipboard, [command]);
+  assert.equal(h.elements['owner-command'].innerHTML, undefined);
+  assert.doesNotMatch(h.html, /public_test_pairing_code|localStorage|sessionStorage/);
+});
+
+test('verified owner binding replaces pairing with the authenticated ID and private workflow', async () => {
+  const h = setupHarness({ ok: true, ready: true, owner: { bound: false, expectedUsername: 'drcharlestz' } });
+  h.elements['setup-key'].value = 's'.repeat(64);
+  await h.elements['check-status'].listeners.click();
+  assert.equal(h.elements['owner-pair'].hidden, false);
+  h.setResponse({ ok: true, owner: { bound: false, expectedUsername: 'drcharlestz' }, pairing: { command: '/claimowner public_test_code_1234567890', expiresAt: Math.floor(Date.now() / 1000) + 600, username: 'drcharlestz' } });
+  await h.elements['owner-pair'].listeners.click();
+  h.setResponse({ ok: true, ready: true, owner: { bound: true, userId: '123456789', expectedUsername: 'drcharlestz' } });
+  await h.elements['owner-check'].listeners.click();
+  assert.equal(h.elements['owner-pair'].hidden, true);
+  assert.equal(h.elements['owner-pairing'].hidden, true);
+  assert.equal(h.elements['owner-command'].value, '');
+  assert.equal(h.elements['owner-bound'].hidden, false);
+  assert.match(h.elements['owner-bound'].textContent, /@drcharlestz.*123456789/);
+  assert.match(h.elements['owner-next'].textContent, /\/updates.*\/broadcast/);
+  assert.match(h.elements['owner-feedback'].textContent, /Haiwezi kubadilishwa/);
+  assert.equal(h.timers[0].cleared, true);
+  assert.doesNotMatch(h.html, /123456789/);
+});
+
+test('pairing commands clear at expiry or key changes and owner errors never echo provider content', async () => {
+  const h = setupHarness({ ok: true, owner: { bound: false, expectedUsername: 'drcharlestz' }, pairing: { command: '/claimowner public_test_code_1234567890', expiresAt: Math.floor(Date.now() / 1000) + 600, username: 'drcharlestz' } }, 'en');
+  h.elements['setup-key'].value = 's'.repeat(64);
+  await h.elements['owner-pair'].listeners.click();
+  h.timers[0].handler();
+  assert.equal(h.elements['owner-command'].value, '');
+  assert.equal(h.elements['owner-pairing'].hidden, true);
+  assert.match(h.elements['owner-feedback'].textContent, /expired/);
+  await h.elements['owner-pair'].listeners.click();
+  h.elements['setup-key'].listeners.input();
+  assert.equal(h.elements['owner-command'].value, '');
+  assert.equal(h.elements['owner-pair'].hidden, true);
+  h.setResponse({ ok: false, httpStatus: 409, error: 'owner_bound', message: 'private-provider-information' });
+  await h.elements['owner-pair'].listeners.click();
+  assert.match(h.elements['owner-feedback'].textContent, /already connected/);
+  assert.doesNotMatch(h.elements['owner-feedback'].textContent, /private-provider-information/);
+  assert.equal(h.elements['owner-command'].value, '');
+});
+
+test('public copy explains owner product announcements and retention without exposing operator commands', () => {
+  for (const [lang, title, retention] of [['sw', 'Taarifa za maboresho.', 'historia ya matangazo ya siku 30 zilizopita'], ['en', 'Product updates.', 'announcement history for the past 30 days']]) {
+    const home = renderHome({ lang });
+    const privacy = renderPrivacy(lang);
+    assert.ok(home.includes(title));
+    assert.ok(privacy.includes(retention));
+    assert.match(privacy, lang === 'en' ? /delivery records are removed in scheduled batches; clearing a large backlog may take longer/ : /rekodi za kutuma za zamani huondolewa kwa awamu kwenye usafishaji uliopangwa; rekodi zikiwa nyingi/);
+    for (const page of [home, privacy]) assert.doesNotMatch(page, /(?:^|[>\s])\/(?:claimowner|broadcast|updates)\b|\/api\/setup\/owner|owner-user-id/);
+  }
 });
 
 test('privacy page describes per-group metadata without claiming to archive conversations', () => {

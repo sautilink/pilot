@@ -6,6 +6,7 @@ import {renderDashboard} from './dashboard.js';
 import {handleDashboardApi} from './dashboard-api.js';
 import {createGuardrailStore} from './guardrail-store.js';
 import {operationalHealth} from './monitoring.js';
+import {createOwnerAuth} from './owner-auth.js';
 
 const SECURITY_HEADERS={
   'X-Content-Type-Options':'nosniff',
@@ -82,7 +83,8 @@ async function setup(request,env,lang='sw') {
     const state=await publicState(env);
     const webhook=await api.call('getWebhookInfo');
     return response({ok:true,...state,database:'connected',webhook_url:webhook.url,
-      status:{pending_updates:webhook.pending_update_count,last_error:webhook.last_error_message || null,allowed_updates:webhook.allowed_updates || []},operations:state.ready ? await operationalHealth(env.DB) : null});
+      status:{pending_updates:webhook.pending_update_count,last_error:webhook.last_error_message || null,allowed_updates:webhook.allowed_updates || []},operations:state.ready ? await operationalHealth(env.DB) : null,
+      owner:state.ready ? await createOwnerAuth({db:env.DB}).status() : {bound:false,expectedUsername:'drcharlestz'}});
   }
   const identity=await api.call('getMe');
   if(!isExpectedBot(identity,env.BOT_USERNAME || 'sautilinkpilotbot')) {
@@ -101,6 +103,28 @@ async function setup(request,env,lang='sw') {
   return response({ok:true,ready:true,username:identity.username,webhook_url:url,database:'ready',status:messages.connected});
 }
 
+async function pairOwner(request,env,lang) {
+  const messages=SETUP_MESSAGES[lang==='en' ? 'en' : 'sw'];
+  if(!await authorize(request,env)) return error(messages.authorization,401);
+  const origin=request.headers.get('Origin');
+  if(origin && origin!==baseUrl(env)) return error(messages.origin,403);
+  if(!(await publicState(env)).ready) return response({ok:false,error:'owner_setup_not_ready'},409);
+  if(!/^application\/json(?:\s*;|$)/i.test(request.headers.get('Content-Type') || '')) return response({ok:false,error:'owner_request_invalid'},400);
+  if(Number(request.headers.get('Content-Length') || 0)>1024) return response({ok:false,error:'owner_request_invalid'},413);
+  const raw=await request.text();
+  if(new TextEncoder().encode(raw).byteLength>1024) return response({ok:false,error:'owner_request_invalid'},413);
+  let body; try {body=JSON.parse(raw);} catch {return response({ok:false,error:'owner_request_invalid'},400);}
+  if(body?.action!=='pair' || Object.keys(body).length!==1) return response({ok:false,error:'owner_request_invalid'},400);
+  const owner=createOwnerAuth({db:env.DB});
+  try {
+    const pairing=await owner.beginPairing();
+    return response({ok:true,owner:await owner.status(),pairing});
+  } catch(cause) {
+    if(['owner_bound','owner_pair_rate_limited'].includes(cause?.code)) return response({ok:false,error:cause.code},cause.status);
+    throw cause;
+  }
+}
+
 export async function handleFetch(request,env,ctx) {
   let lang='sw';
   try {
@@ -115,6 +139,7 @@ export async function handleFetch(request,env,ctx) {
       const {ready}=await publicState(env); return response({ok:ready,service:'SautiLink Pilot'},ready ? 200 : 503);
     }
     if((path==='/api/setup' && request.method==='POST') || (path==='/api/setup/status' && request.method==='GET')) return await setup(request,env,lang);
+    if(path==='/api/setup/owner') return request.method==='POST' ? await pairOwner(request,env,lang) : error('Tumia POST.',405);
     if(path!=='/telegram/webhook') return error('Haijapatikana.',404);
     if(request.method!=='POST') return error('Tumia POST.',405);
     if(!validToken(env.BOT_TOKEN) || !env.DB || !env.GROUPS) return error('Bot bado haijaunganishwa.',503);

@@ -162,6 +162,46 @@ The Worker runs monitoring on a ten-minute schedule. Each run processes a bounde
 
 `/health` remains a minimal public readiness check. Operator-wide counts and monitoring status are available only through the existing `SETUP_KEY`-protected setup status endpoint; group admins do not receive infrastructure secrets.
 
+## Owner announcements
+
+Pilot's owner can prepare an announcement privately, inspect its saved content and target count, then confirm delivery to connected groups. This authority belongs to one permanently bound Telegram account. Being a group administrator, knowing a command, copying a button, or later obtaining the owner's old username does not grant it.
+
+### Bind the owner once
+
+1. Open `https://pilot.sautilink.com/setup` and authenticate with the existing `SETUP_KEY`.
+2. Use the owner-pairing control to generate a one-use code. It expires after ten minutes; generating another valid code replaces the previous one.
+3. From the personal Telegram account whose current username is **`@drcharlestz`**, privately send the displayed `/claimowner CODE` command to **`@sautilinkpilotbot`**.
+4. Pilot binds that account's numeric Telegram user ID permanently. Later username changes do not change ownership. The bot and setup interface cannot reassign an existing binding.
+
+The code is stored as a hash and is not echoed in the bot's reply. Pairing requires both the protected operator code and the expected account's authentic private Telegram update. Send it only to the bot privately. `/myid` privately returns the requesting person's own numeric ID without revealing owner information.
+
+### Prepare, review and confirm
+
+Only the bound owner sees **Pilot updates / Updates za Pilot** on the private welcome page. `/updates` opens the same panel. Broadcast commands are absent from the ordinary private, group and group-admin native command menus; the server also checks ownership on every operation.
+
+| Owner action | Result |
+| --- | --- |
+| `/updates` | View target count, current draft or delivery progress, and recent broadcasts |
+| `/broadcast` | Start a private composition step; send the next original message within 15 minutes |
+| `/broadcast Your announcement` | Create a text draft immediately, preserving native Telegram formatting |
+| **Confirm and send / Thibitisha na tuma** | Confirm the exact saved draft from its original confirmation message |
+| **Change content / Badili maudhui** | Cancel the pending draft and start a replacement; a broadcast already running cannot be edited |
+| **Cancel broadcast / Ghairi tangazo** | Stop the pending draft or remaining delivery work |
+
+A draft accepts one original text message, photo, video, document, animation, audio, or voice message. Captions and supported native entities are preserved; media uses Telegram file IDs instead of fetching an external upload URL. Albums, forwarded or protected messages, service messages and unsupported content are rejected. Ordinary commands such as `/start` are never mistaken for the announcement body.
+
+The bot sends the saved content back to the owner and a separate confirmation panel. No group receives a draft before confirmation. The content and target-group list are frozen when the draft is created, and confirmation expires after 24 hours. Editing the original source message does not change the saved draft. The confirmation is bound to the exact private bot message: an old, copied, mismatched or inaccessible confirmation cannot authorize a new send.
+
+**Target groups** is the frozen candidate count, not a promise of successful delivery. It includes active group records and older groups whose current connection is not yet verified. Groups added after draft creation belong to a later broadcast. Pausing moderation does not unsubscribe a group from owner announcements.
+
+### Delivery and cancellation
+
+A dedicated global Durable Object serializes owner operations and delivery alarms. Delivery continues in bounded, paced batches; each target gets a current membership and send-permission check before sending. Removed or ineligible groups are skipped. The panel separates confirmed deliveries, definite rejections, skipped targets, uncertain outcomes, pending work and cancelled targets. Telegram rate-limit delays are persisted for later handling.
+
+A delivery whose response was lost is marked unconfirmed and is not automatically repeated. A restarted Worker can resume work that was still pending. An unfinished broadcast expires 30 days after creation, preventing an old campaign from resuming after a long outage. Cancellation stops work that has not been committed to sending; a Telegram send already in flight may finish. Cancellation does not delete announcements already delivered. There is no automatic reposting or scheduled marketing sequence.
+
+Broadcast content, audience and outcomes are intentionally stored for this feature; see **Storage and privacy** below. The owner panel is private and bilingual, using the owner's saved personal language. Group admins' existing moderation controls and each group's language preference are independent.
+
 ## Swahili and English
 
 The language choices are independent:
@@ -240,7 +280,7 @@ Keep the key in a password manager. The setup page does not save it in local sto
 Return to `/setup`, enter the setup key and run setup. The server:
 
 1. Verifies that `BOT_TOKEN` identifies the expected `sautilinkpilotbot`.
-2. Creates the D1 schema idempotently, including delivery tracking, admin selections, language preferences, control records and optional guardrails. SQL migrations are also supplied in `migrations/`.
+2. Creates the D1 schema idempotently, including delivery tracking, admin selections, language preferences, control records, optional guardrails and owner announcements. SQL migrations are also supplied in `migrations/`.
 3. Registers localized private, group, and administrator command menus, plus the bot's profile descriptions.
 4. Sets `https://pilot.sautilink.com/telegram/webhook` with a secret header.
 5. Explicitly subscribes to `message`, `edited_message`, `my_chat_member`, `chat_member`, `callback_query`, and `chat_join_request` updates. These enable inline navigation and optional join screening.
@@ -277,6 +317,7 @@ Use a separate ordinary test account; admins are intentionally exempt. Add the b
 - Opt in to welcomes or flood control in a test group; verify the initial defaults remain off elsewhere.
 - Enable join requests and Invite users before checking challenge/manual-review behavior; timeout must not ban an applicant.
 - Opt into notifications for a test admin and verify private delivery before relying on reports.
+- Verify owner pairing and the private draft preview without confirming a broadcast to live groups; nonowners must not receive target counts or owner controls.
 - The website's language selector and demo work without changing live group state.
 
 The automated suite uses a fake Telegram API, real local SQLite, and browser-script harnesses. Passing it is not a claim that these live Telegram checks have been performed.
@@ -296,7 +337,9 @@ The automated suite uses a fake Telegram API, real local SQLite, and browser-scr
 
 D1 stores chat/user IDs, per-group strike counts, incident reason categories/action status, and processed update IDs. Delivery records add the notice state, attempt count, retry time, categorized error, and Telegram message ID when confirmed. Admin selections store the person and last selected group; these records never substitute for a fresh Telegram role check. Language preferences store separate `user` and `group` choices. Service settings also hold readiness, bot identity, and experience-upgrade metadata.
 
-The database does not retain moderated message bodies, media, captions, display names, supplied checker text, or bot tokens. It does intentionally store admin-entered group rules and templates, configured whitelist destinations, and member-written appeal text, along with case/audit/operation metadata and notification preferences. Join screening stores identifiers, a temporary challenge answer and delivery/decision state; it does not retain invite links or join-request bios. Incoming text and names are processed for the current update and may appear in messages sent to Telegram. The public `/privacy` page describes the stored metadata and retention in both languages.
+The database does not retain ordinary moderated message bodies, their media or captions, member display names from moderation, supplied checker text, or bot tokens. It does intentionally store admin-entered group rules and templates, configured whitelist destinations, and member-written appeal text, along with case/audit/operation metadata and notification preferences. Join screening stores identifiers, a temporary challenge answer and delivery/decision state; it does not retain invite links or join-request bios. Incoming text and names are processed for the current update and may appear in messages sent to Telegram. The public `/privacy` page describes the stored metadata and retention in both languages.
+
+Owner announcements deliberately retain the owner's selected text/caption, native entity data and Telegram media file IDs, along with a content hash, target group IDs, preview ID, delivery outcomes and action records. Media files are not downloaded into D1. The owner binding stores the permanent numeric user ID and pairing time; an unclaimed pairing code is held only as a temporary hash. The connection registry stores group IDs and observed bot membership states, without group conversation content.
 
 Daily cleanup applies these rules. Control-history deletion uses bounded batches of 500 records per table, so a backlog can take more than one sweep:
 
@@ -316,6 +359,12 @@ Daily cleanup applies these rules. Control-history deletion uses bounded batches
 | Per-admin notification preferences | Retained for operation, including an opted-out/disabled state; delivery always rechecks the current role |
 | Member strike totals | No automatic expiry; `/forgive` resets the count for the relevant group |
 | Group settings and language preferences | Kept for continued service; a new language choice replaces the previous choice |
+| Owner binding | Kept permanently for authorization; usernames are not used as the persistent identity |
+| Unclaimed owner-pairing hash | Invalid after ten minutes; cleared on successful binding, replacement or expiry cleanup |
+| Broadcast composition step | Expires after 15 minutes |
+| Unconfirmed broadcast draft | Confirmation expires after 24 hours; remaining staged targets are cancelled |
+| Broadcast content, campaign metadata, target outcomes and action records | Eligible for bounded cleanup after 30 days; content is cleared independently of a large delivery-record backlog |
+| Broadcast group connection registry | Kept for discovery and delivery checks; every delivery still verifies the live connection |
 | Service and upgrade settings | Kept for continued operation |
 
 Cleanup does not remove messages already sent to Telegram. Telegram messages, platform request logs, and backups are subject to the relevant platform and operator settings.
@@ -345,6 +394,9 @@ node --test --test-isolation=none tests/*.test.js
 - `src/moderator.js`: enforcement, escalation, membership changes, and safe reconciliation.
 - `src/commands.js`: commands, callbacks, fresh admin authorization, selected-group context, and language choices.
 - `src/feature-commands.js`: private link checks, personal cases, appeals, verified group summaries, and opt-in commands.
+- `src/broadcast-commands.js`: private owner composition, native content snapshots, previews, confirmation and progress in both languages.
+- `src/owner-auth.js`: one-time operator pairing and permanent numeric owner authorization.
+- `src/broadcast-store.js`, `src/broadcast-service.js` and `src/broadcast-router.js`: connection registry, frozen drafts/audiences, owner-only dispatch, paced delivery and recovery records.
 - `src/dashboard.js`: responsive bilingual Mini App and its authenticated controls.
 - `src/miniapp-auth.js` and `src/dashboard-api.js`: Telegram identity validation, request validation, and group-queue routing.
 - `src/control-store.js` and `src/control-service.js`: per-group settings, custom allowances, case review, appeals, subscriptions, authorization, operation idempotency and audit records.
@@ -356,7 +408,7 @@ node --test --test-isolation=none tests/*.test.js
 - `src/store.js`: D1 schemas, state transitions, preferences, delivery records, and retention cleanup.
 - `src/telegram.js`: bounded Telegram requests and webhook authentication.
 - `src/handler.js`: localized HTTP routing, authenticated setup, webhook validation, and the ready-installation upgrade trigger.
-- `src/index.js`: Cloudflare entry point, per-chat Durable Object queue, scheduled monitoring, and retention cleanup.
+- `src/index.js`: Cloudflare entry point, per-chat and global broadcast Durable Object queues, delivery alarms, scheduled monitoring, and retention cleanup.
 - `src/pages.js`: bilingual public website, local interactive simulator, privacy, and operator setup.
 - `migrations/`: initial and supplemental notification, admin, language, control-center and guardrail schemas.
 - `wrangler.jsonc`: existing Worker/domain, resource bindings, ten-minute monitoring, and daily cleanup schedules.
