@@ -84,8 +84,8 @@ async function fixture(t, { bound = true } = {}) {
   };
   const experience = createBotExperience({ db, store, api, owner: auth, dispatchBroadcast, clock: () => NOW });
   return { db, store, owner, calls, requests, drafts, state,
-    command: (message, updateId = update++) => experience.handleCommand(message, updateId),
-    callback: (query, updateId = update++) => experience.handleCallback(query, updateId),
+    command: (message, updateId = update++, options) => experience.handleCommand(message, updateId, options),
+    callback: (query, updateId = update++, options) => experience.handleCallback(query, updateId, options),
     sent: () => calls.filter(call => call.method.startsWith('send')),
     lastReply: () => calls.filter(call => call.method === 'sendMessage').at(-1)?.params,
   };
@@ -101,6 +101,60 @@ test('only the permanently bound owner receives a private home broadcast button;
   assert.ok(f.lastReply().reply_markup.inline_keyboard.flat().some(button => button.callback_data === 'pilot:bc:panel'));
   for (const language of ['sw', 'en']) for (const commands of [getPublicCommands(language), getGroupCommands(language), getAdminCommands(language)]) assert.ok(commands.every(item => !['updates', 'broadcast', 'claimowner'].includes(item.command)));
   assert.equal(f.requests.length, 0);
+});
+
+test('the admitted owner snapshot only controls home navigation and never authorizes broadcast actions', async t => {
+  const f = await fixture(t);
+  f.store.getLanguage = async () => assert.fail('the admitted update already read the language');
+  const options = { updateChecked: true, context: { userLanguage: 'en', groupLanguage: null, ownerChecked: true, ownerId: String(OWNER) } };
+  const hasOwnerButton = () => f.lastReply().reply_markup?.inline_keyboard.flat().some(button => button.callback_data === 'pilot:bc:panel');
+  await f.command(privateMessage('/start'), 700, options);
+  assert.equal(hasOwnerButton(), true);
+  assert.equal(f.state.ownerChecks, 0);
+  await f.command(privateMessage('/start', OTHER), 701, options);
+  assert.equal(hasOwnerButton(), false);
+  await f.command(privateMessage('/start', OWNER, { from: from(OWNER, { is_bot: true }) }), 702, options);
+  assert.equal(hasOwnerButton(), false);
+
+  const previousSends = f.sent().length;
+  await f.command(privateMessage('/start', OTHER, { from: from(OWNER) }), 703, options);
+  assert.equal(f.sent().length, previousSends, 'a mismatched private peer cannot receive the owner menu');
+  await f.command(privateMessage('/updates', OTHER), 704, {
+    ...options, context: { ...options.context, ownerId: String(OTHER) },
+  });
+  assert.equal(f.state.ownerChecks, 1);
+  assert.match(f.lastReply().text, /not available to this account/);
+  assert.equal(f.requests.length, 0);
+});
+
+test('admitted broadcast messages and callbacks reuse preferences and deduplication while mutations keep fresh owner checks', async t => {
+  const f = await fixture(t);
+  const originalSeen = f.store.seen, originalLanguage = f.store.getLanguage;
+  let seenReads = 0, languageReads = 0;
+  f.store.seen = async id => { seenReads++; return originalSeen(id); };
+  f.store.getLanguage = async (...args) => { languageReads++; return originalLanguage(...args); };
+  const options = { updateChecked: true, context: { userLanguage: null, ownerChecked: true, ownerId: String(OWNER) } };
+  await f.command(privateMessage('/broadcast A new update'), 710, options);
+  const draft = [...f.drafts.values()][0];
+  assert.ok(draft.preview_message_id);
+  assert.equal(f.state.ownerChecks, 1);
+  await f.callback(callback('confirm', draft.id, OWNER, {
+    message: { message_id: draft.preview_message_id, date: NOW, chat: { id: OWNER, type: 'private' }, from: bot },
+  }), 711, options);
+  assert.equal(f.state.ownerChecks, 2);
+  assert.equal(draft.status, 'running');
+  assert.equal(seenReads, 0);
+  assert.equal(languageReads, 0);
+
+  await f.store.done(712, NOW);
+  await f.store.done(713, NOW);
+  const sends = f.sent().length, requests = f.requests.length;
+  await f.command(privateMessage('/updates'), 712);
+  await f.callback(callback('status', draft.id), 713);
+  assert.equal(seenReads, 2, 'standalone broadcast handlers still check processed updates');
+  assert.equal(f.sent().length, sends);
+  assert.equal(f.requests.length, requests);
+  assert.equal(f.state.ownerChecks, 2);
 });
 
 test('nonowners cannot view counts and group or fake-private commands cause no broadcasts or private replies', async t => {

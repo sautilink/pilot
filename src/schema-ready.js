@@ -1,6 +1,7 @@
 // A deployment's schema is durable; a chat coordinator's memory is not. Keep
 // family readiness in D1 so a new coordinator need not replay every CREATE.
 // Only initialization results are cached here, never users, roles or settings.
+import { databaseIdentity } from './request-timing.js';
 export const SCHEMA_FAMILY_VERSIONS = Object.freeze({
   experience: '1', control: '1', guards: '1', owner: '1', broadcast: '1',
 });
@@ -11,8 +12,9 @@ const split = sql => sql.split(';').map(part => part.trim()).filter(Boolean);
 const objectName = sql => /^CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\s+IF\s+NOT\s+EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)/i.exec(sql)?.[1];
 
 function stateFor(db) {
-  let state = bindings.get(db);
-  if (!state) { state = { catalog: null, ready: new Map() }; bindings.set(db, state); }
+  const key = databaseIdentity(db);
+  let state = bindings.get(key);
+  if (!state) { state = { catalog: null, ready: new Map() }; bindings.set(key, state); }
   return state;
 }
 

@@ -83,24 +83,54 @@ export function createStore(db) {
       ]);
       return results[1].results[0];
     },
+    async moderationState(chat,user,incidentId) {
+      const chatId=String(chat), target=user == null ? null : String(user);
+      const statements=[
+        db.prepare('INSERT OR IGNORE INTO groups(chat_id) VALUES(?)').bind(chatId),
+        db.prepare('SELECT * FROM groups WHERE chat_id=?').bind(chatId),
+        db.prepare("SELECT value FROM settings WHERE key='ready_since'"),
+      ];
+      // A role-exempt sender should not acquire a member record merely because
+      // their message contains a link. Read defaults until an incident is planned.
+      if(target!==null) statements.push(db.prepare('SELECT * FROM members WHERE chat_id=? AND user_id=?').bind(chatId,target));
+      statements.push(db.prepare('SELECT * FROM incidents WHERE id=?').bind(incidentId));
+      const results=await db.batch(statements);
+      const member=target===null ? null : results[3].results[0] || {
+        chat_id:chatId,user_id:target,strikes:0,last_incident:null,active_until:0,episode_at:0,override_at:0,
+      };
+      return {group:results[1].results[0],activation:Number(results[2].results[0]?.value || 0),member,incident:results.at(-1).results[0] || null};
+    },
     incident(id) { return first('SELECT * FROM incidents WHERE id=?',id); },
     async plan(row) {
-      await run('INSERT OR IGNORE INTO incidents(id,chat_id,user_id,message_id,event_at,created_at,strike,until_date,reasons) VALUES(?,?,?,?,?,?,?,?,?)',
-        row.id,String(row.chat_id),row.user_id == null ? null : String(row.user_id),row.message_id,row.event_at,row.created_at,row.strike,row.until_date,row.reasons);
-      return this.incident(row.id);
+      const statements=[];
+      if(row.user_id!=null) statements.push(db.prepare('INSERT OR IGNORE INTO members(chat_id,user_id) VALUES(?,?)').bind(String(row.chat_id),String(row.user_id)));
+      statements.push(
+        db.prepare('INSERT OR IGNORE INTO incidents(id,chat_id,user_id,message_id,event_at,created_at,strike,until_date,reasons) VALUES(?,?,?,?,?,?,?,?,?)')
+          .bind(row.id,String(row.chat_id),row.user_id == null ? null : String(row.user_id),row.message_id,row.event_at,row.created_at,row.strike,row.until_date,row.reasons),
+        db.prepare('SELECT * FROM incidents WHERE id=?').bind(row.id),
+      );
+      const results=await db.batch(statements);
+      return results.at(-1).results[0] || null;
     },
     status(id,status) { return run('UPDATE incidents SET status=? WHERE id=?',status,id); },
     async confirm(row,now) {
-      await db.batch([
+      const statements=[];
+      if(/^[1-9]\d*$/.test(String(row.user_id)) && Number.isSafeInteger(Number(row.user_id))) {
+        // Recovery may find an existing incident after a missing member row was
+        // repaired. Ensure its defaults atomically without replacing overrides.
+        statements.push(db.prepare('INSERT OR IGNORE INTO members(chat_id,user_id) VALUES(?,?)').bind(String(row.chat_id),String(row.user_id)));
+      }
+      statements.push(
         db.prepare("UPDATE members SET strikes=MAX(strikes,?),last_incident=?,active_until=?,episode_at=? WHERE chat_id=? AND user_id=? AND override_at < ? AND EXISTS(SELECT 1 FROM incidents WHERE id=? AND status!='cancelled')")
           .bind(row.strike,row.id,row.until_date || -1,row.event_at,String(row.chat_id),String(row.user_id),row.event_at,row.id),
         db.prepare("UPDATE incidents SET status='confirmed' WHERE id=? AND status!='cancelled' AND EXISTS(SELECT 1 FROM members WHERE chat_id=? AND user_id=? AND override_at<?)").bind(row.id,String(row.chat_id),String(row.user_id),row.event_at)
-      ]);
+      );
+      await db.batch(statements);
     },
     async override(chat,user,at,reset=false,updateId=null) {
       await ensureExtras();
-      await this.member(chat,user);
       const changes=[
+        db.prepare('INSERT OR IGNORE INTO members(chat_id,user_id) VALUES(?,?)').bind(String(chat),String(user)),
         db.prepare(`UPDATE members SET ${reset ? 'strikes=0,' : ''} active_until=CASE WHEN episode_at<=? THEN 0 ELSE active_until END,override_at=MAX(override_at,?) WHERE chat_id=? AND user_id=?`)
           .bind(at,at,String(chat),String(user)),
         db.prepare("UPDATE incidents SET status='cancelled' WHERE chat_id=? AND user_id=? AND event_at<=? AND status!='cancelled'")
@@ -115,11 +145,12 @@ export function createStore(db) {
       await ensureExtras();
       // Existing notified=1 records are legacy claims, not proof of delivery.
       // Do not replay them: Telegram may already have received the old notice.
-      await db.batch([
+      const results=await db.batch([
         db.prepare("INSERT OR IGNORE INTO notification_delivery(incident_id,updated_at) SELECT id,? FROM incidents WHERE id=? AND notified=0").bind(now,id),
-        db.prepare('UPDATE incidents SET notified=1 WHERE id=? AND EXISTS(SELECT 1 FROM notification_delivery WHERE incident_id=?)').bind(id,id)
+        db.prepare('UPDATE incidents SET notified=1 WHERE id=? AND EXISTS(SELECT 1 FROM notification_delivery WHERE incident_id=?)').bind(id,id),
+        db.prepare('SELECT * FROM notification_delivery WHERE incident_id=?').bind(id),
       ]);
-      return first('SELECT * FROM notification_delivery WHERE incident_id=?',id);
+      return results[2].results[0] || null;
     },
     async startNoticeAttempt(id,now) {
       const result=await run("UPDATE notification_delivery SET status='sending',attempts=attempts+1,updated_at=? WHERE incident_id=? AND status='pending' AND retry_at<=?",now,id,now);

@@ -15,6 +15,7 @@ import {handleToolsApi,handleIntegrationApi} from './tools-api.js';
 import {createCommunityService} from './community-service.js';
 import {renderCommunityHub} from './community-pages.js';
 import {renderReleasePage} from './release-pages.js';
+import {createRequestTiming,instrumentDatabase} from './request-timing.js';
 
 const SECURITY_HEADERS={
   'X-Content-Type-Options':'nosniff',
@@ -177,52 +178,61 @@ export async function handleFetch(request,env,ctx) {
     if(new TextEncoder().encode(body).byteLength>1048576) return error('Ombi ni kubwa sana.',413);
     let update; try { update=JSON.parse(body); } catch { return error('JSON si sahihi.',400); }
     if(!Number.isSafeInteger(update?.update_id)) return error('Update si sahihi.',400);
-    const state=await readExperienceState(env.DB);
-    if(!state.ready) return error('Kamilisha setup kwanza.',503);
-    const event=update.message || update.edited_message || update.my_chat_member || update.chat_member || update.chat_join_request;
-    const callback=update.callback_query;
-    const accessibleCallbackChat=callback?.message?.date!==0 && Number.isSafeInteger(callback?.message?.chat?.id);
-    const callbackChat=accessibleCallbackChat ? callback.message.chat.id : callback?.from?.id;
-    let chatId=callback ? callbackChat : event?.chat?.id;
-    const joinCallback=/^pilot:join:([a-f0-9]{24}):\d{1,3}$/.exec(String(callback?.data || ''));
-    if(joinCallback && Number.isSafeInteger(callback?.from?.id)) {
-      const guards=createGuardrailStore(env.DB);
-      await guards.ensure();
-      const join=await guards.first('SELECT chat_id,user_id FROM pilot_join_requests WHERE id=?',joinCallback[1]);
-      if(join && join.user_id===String(callback.from.id)) chatId=Number(join.chat_id);
-    }
-    if(!Number.isSafeInteger(chatId) || chatId===0 || (callback && !accessibleCallbackChat && chatId<0)) return response({ok:true});
-    let callbackAcknowledgementStarted=false;
-    if(typeof ctx?.waitUntil==='function' && isMenuCallback(callback) && Number.isSafeInteger(callback.from?.id) && callback.from.id>0) {
-      // Empty acknowledgements disclose no data and grant no authority. Starting
-      // one here lets the spinner stop while the chat coordinator does its work.
-      // The internal header is created here, never copied from an incoming one.
-      const acknowledgement=createTelegram(env.BOT_TOKEN).call('answerCallbackQuery',{callback_query_id:callback.id}).catch(()=>{});
-      try {ctx.waitUntil(acknowledgement);} catch {await acknowledgement;}
-      callbackAcknowledgementStarted=true;
-    }
-    // Upgrade metadata only on authenticated, valid updates for an already-ready
-    // installation. Public GETs and failed authentication cannot mutate Telegram.
-    // Await callback subscription first; profile/menu updates finish in waitUntil.
-    if(typeof ctx?.waitUntil==='function') {
-      try {
-        await syncExperience({
-          db:env.DB,token:env.BOT_TOKEN,webhookUrl:`${baseUrl(env)}/telegram/webhook`,
-          expectedUsername:env.BOT_USERNAME || 'sautilinkpilotbot',
-          state,
-          waitUntil:promise=>ctx.waitUntil(promise),
-        });
-      } catch {
-        // Metadata availability must not block moderation of this update.
-        console.warn('pilot_experience_sync_failed',{stage:'webhook_trigger',kind:'sync_unavailable'});
+    const timing=createRequestTiming('webhook');
+    timing.start();
+    let outcome='error';
+    try {
+      const db=instrumentDatabase(env.DB,()=>timing);
+      const state=await readExperienceState(db);
+      if(!state.ready) {outcome='retry';return error('Kamilisha setup kwanza.',503);}
+      const event=update.message || update.edited_message || update.my_chat_member || update.chat_member || update.chat_join_request;
+      const callback=update.callback_query;
+      const accessibleCallbackChat=callback?.message?.date!==0 && Number.isSafeInteger(callback?.message?.chat?.id);
+      const callbackChat=accessibleCallbackChat ? callback.message.chat.id : callback?.from?.id;
+      let chatId=callback ? callbackChat : event?.chat?.id;
+      const joinCallback=/^pilot:join:([a-f0-9]{24}):\d{1,3}$/.exec(String(callback?.data || ''));
+      if(joinCallback && Number.isSafeInteger(callback?.from?.id)) {
+        const guards=createGuardrailStore(db);
+        await guards.ensure();
+        const join=await guards.first('SELECT chat_id,user_id FROM pilot_join_requests WHERE id=?',joinCallback[1]);
+        if(join && join.user_id===String(callback.from.id)) chatId=Number(join.chat_id);
       }
-    }
-    // Same group -> same object. Its queue protects strikes across network awaits.
-    const id=env.GROUPS.idFromName(String(chatId));
-    const result=await env.GROUPS.get(id).fetch('https://internal/telegram',{
-      method:'POST',headers:{'Content-Type':'application/json',...(callbackAcknowledgementStarted?{'X-Pilot-Callback-Acknowledgement':'started'}:{})},body:JSON.stringify(update)
-    });
-    return response({ok:result.ok},result.ok ? 200 : 503);
+      if(!Number.isSafeInteger(chatId) || chatId===0 || (callback && !accessibleCallbackChat && chatId<0)) {outcome='ok';return response({ok:true});}
+      let callbackAcknowledgementStarted=false;
+      if(typeof ctx?.waitUntil==='function' && isMenuCallback(callback) && Number.isSafeInteger(callback.from?.id) && callback.from.id>0) {
+        // Empty acknowledgements disclose no data and grant no authority. Starting
+        // one here lets the spinner stop while the chat coordinator does its work.
+        // The internal header is created here, never copied from an incoming one.
+        const acknowledgement=createTelegram(env.BOT_TOKEN).call('answerCallbackQuery',{callback_query_id:callback.id}).catch(()=>{});
+        try {ctx.waitUntil(acknowledgement);} catch {await acknowledgement;}
+        callbackAcknowledgementStarted=true;
+      }
+      // Upgrade metadata only on authenticated, valid updates for an already-ready
+      // installation. Public GETs and failed authentication cannot mutate Telegram.
+      // Initial protected setup already subscribes before marking ready. Upgrade
+      // metadata is bounded background maintenance, never a user-response gate.
+      if(typeof ctx?.waitUntil==='function') {
+        try {
+          ctx.waitUntil(syncExperience({
+            db:env.DB,token:env.BOT_TOKEN,webhookUrl:`${baseUrl(env)}/telegram/webhook`,
+            expectedUsername:env.BOT_USERNAME || 'sautilinkpilotbot',
+            state,
+          }).catch(()=>{
+            console.warn('pilot_experience_sync_failed',{stage:'webhook_trigger',kind:'sync_unavailable'});
+          }));
+        } catch {
+          // Metadata availability must not block moderation of this update.
+          console.warn('pilot_experience_sync_failed',{stage:'webhook_trigger',kind:'sync_unavailable'});
+        }
+      }
+      // Same group -> same object. Its queue protects strikes across network awaits.
+      const id=env.GROUPS.idFromName(String(chatId));
+      const result=await env.GROUPS.get(id).fetch('https://internal/telegram',{
+        method:'POST',headers:{'Content-Type':'application/json',...(callbackAcknowledgementStarted?{'X-Pilot-Callback-Acknowledgement':'started'}:{})},body:JSON.stringify(update)
+      });
+      outcome=result.ok ? 'ok' : 'retry';
+      return response({ok:result.ok},result.ok ? 200 : 503);
+    } finally {timing.finish(outcome);}
   } catch(errorValue) {
     // Do not log an error stack or outbound URL (Telegram URLs contain BOT_TOKEN).
     console.error('pilot_request_failed',{type:errorValue?.name || 'Error'});

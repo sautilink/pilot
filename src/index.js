@@ -11,7 +11,7 @@ import { createBroadcastStore } from './broadcast-store.js';
 import { createBroadcastService } from './broadcast-service.js';
 import { routeBroadcast } from './broadcast-router.js';
 import { createBotIdentity } from './bot-identity.js';
-import { createRequestTiming, instrumentTelegram } from './request-timing.js';
+import { createRequestTiming, instrumentTelegram, instrumentDatabase } from './request-timing.js';
 import { createToolServices } from './tools-api.js';
 import { createToolsStore, validChat } from './tools-store.js';
 
@@ -30,11 +30,12 @@ export class GroupCoordinator extends DurableObject {
     this.tail=Promise.resolve();
     this.currentTiming=null;
     this.api=instrumentTelegram(createTelegram(env.BOT_TOKEN),()=>this.currentTiming);
-    const getIdentity=createBotIdentity({db:env.DB,api:this.api,token:env.BOT_TOKEN,expectedUsername:env.BOT_USERNAME || 'sautilinkpilotbot'});
-    this.owner=createOwnerAuth({db:env.DB});
-    this.broadcasts=createBroadcastService({db:env.DB,api:this.api,owner:this.owner});
-    this.tools=createToolServices({db:env.DB,api:this.api,owner:this.owner});
-    this.moderator=createModerator({db:env.DB,api:this.api,owner:this.owner,getIdentity,tools:this.tools,
+    const db=instrumentDatabase(env.DB,()=>this.currentTiming);
+    const getIdentity=createBotIdentity({db,api:this.api,token:env.BOT_TOKEN,expectedUsername:env.BOT_USERNAME || 'sautilinkpilotbot'});
+    this.owner=createOwnerAuth({db});
+    this.broadcasts=createBroadcastService({db,api:this.api,owner:this.owner});
+    this.tools=createToolServices({db,api:this.api,owner:this.owner});
+    this.moderator=createModerator({db,api:this.api,owner:this.owner,getIdentity,tools:this.tools,
       appUrl:`${env.PUBLIC_BASE_URL || 'https://pilot.sautilink.com'}/app`,
       dispatchControl:payload=>dispatch(env,String(payload.chatId),'/control',payload),
       dispatchBroadcast:payload=>dispatch(env,BROADCAST_COORDINATOR,'/broadcast',payload),

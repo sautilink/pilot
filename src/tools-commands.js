@@ -6,15 +6,19 @@ import { isAdmin, isMember } from './tools-store.js';
 
 export function createToolsCommands({db,api,tools,me,clock=()=>Math.floor(Date.now()/1000),baseUrl='https://pilot.sautilink.com'}) {
   const store=createStore(db),control=createControlStore(db);
-  async function handle(message,updateId) {
+  async function handle(message,updateId,{context}={}) {
     const text=String(message.text||''),match=/^\/(tools|flag|ask|events|changelog|feedback)(?:@([A-Za-z0-9_]+))?(?:\s+([\s\S]*))?$/i.exec(text);
     const start=/^\/start(?:@([A-Za-z0-9_]+))?\s+(tools(?:_(-[1-9]\d*))?|community_(-[1-9]\d*)|feedback)$/i.exec(text);
     if(!match&&!start)return false;
-    const bot=await me(),target=match?.[2]||start?.[1];if(target&&target.toLowerCase()!==String(bot.username).toLowerCase())return true;
     if(!Number.isSafeInteger(message.from?.id)||message.from.id<=0||message.from.is_bot||message.sender_chat)return true;
     const isGroup=['group','supergroup'].includes(message.chat?.type),peer=message.chat?.type==='private'&&Number(message.chat.id)===message.from.id;if(!isGroup&&!peer)return true;
     const actor={id:message.from.id,first_name:message.from.first_name,language_code:message.from.language_code};
-    const language=await store.getLanguage('user',actor.id,/^sw/i.test(actor.language_code||'')?'sw':'en'),sw=language==='sw';
+    const fallback=/^sw/i.test(actor.language_code||'')?'sw':'en';
+    const [bot,language]=await Promise.all([me(),Object.hasOwn(context||{},'userLanguage')
+      ? (['sw','en'].includes(context.userLanguage)?context.userLanguage:fallback)
+      : store.getLanguage('user',actor.id,fallback)]);
+    const target=match?.[2]||start?.[1];if(target&&target.toLowerCase()!==String(bot.username).toLowerCase())return true;
+    const sw=language==='sw';
     const command=match?match[1].toLowerCase():start[2]==='feedback'?'feedback':'tools',argument=(match?.[3]||'').trim();
     let chat=isGroup?String(message.chat.id):start?.[3]||start?.[4]||null;
     const t=(en,swahili)=>sw?swahili:en;

@@ -7,12 +7,14 @@ import { createControlService } from './control-service.js';
 import { createGuardrails } from './guardrails.js';
 import { createBroadcastStore } from './broadcast-store.js';
 import { createToolsCommands } from './tools-commands.js';
+import { loadUpdateContext } from './update-context.js';
 
 export const RULES = '<b>🛡 SautiLink Pilot</b>\nGroup lenye utulivu, mazungumzo yenye nafasi.\n\nLinks zisizoruhusiwa na ujumbe wa forward huondolewa.\nAdhabu: saa 24 → siku 7 → ban ya kudumu.\n\nTumia /rules kuona sheria za members, au fungua bot faraghani kwa mwongozo.';
 const ENGLISH_RULES = '<b>🛡 SautiLink Pilot</b>\nA calmer group. More room for conversation.\n\nUnapproved links and forwarded messages are removed.\nPenalties: 24 hours → 7 days → permanent ban.\n\nUse /rules for member rules, or open the bot privately for a guide.';
 const admin = m => m?.status === 'creator' || m?.status === 'administrator';
 const validId = id => Number.isSafeInteger(Number(id)) && Number(id) !== 0;
 const userId = id => validId(id) && Number(id) > 0;
+const messageChat = chat => Number.isSafeInteger(chat?.id) && (chat.type==='private' ? chat.id>0 : ['group','supergroup'].includes(chat.type) && chat.id<0);
 const eventTime = m => Number(m.edit_date || m.date || 0);
 
 export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),dispatchControl,appUrl,owner,dispatchBroadcast,getIdentity,tools}) {
@@ -75,15 +77,16 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
     }
   }
 
-  async function enforce(message,update,rules=[]) {
+  async function enforce(message,update,rules=[],context={}) {
     const chat=message.chat.id, now=clock(), time=eventTime(message);
     if(!['group','supergroup'].includes(message.chat.type) || !validId(chat)) return 'ignored';
     if(String(message.sender_chat?.id)===String(chat)) return 'anonymous_admin';
     const violation=analyzeMessage(message,rules);
     if(!violation.reasons.length) return 'allowed';
     if(!time || time>now+60 || now-Number(message.date || time)>=48*3600) return 'stale';
-    const group=await store.group(chat);
-    const activation=Number(await store.setting('ready_since') || 0);
+    const incidentId=`${chat}:${message.media_group_id ? `album:${message.media_group_id}` : `message:${message.message_id}`}`;
+    const snapshot=await store.moderationState(chat,!message.sender_chat && userId(message.from?.id) ? message.from.id : null,incidentId);
+    const {group,activation}=snapshot;
     if(!group.enabled || time<Math.max(group.activated_at,activation)) return 'paused_or_old';
     const bot=await me();
     if(Number(message.from?.id)===Number(bot.id)) return 'self';
@@ -91,38 +94,42 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
       const info=await api.call('getChat',{chat_id:chat});
       if(String(message.sender_chat.id)===String(info.linked_chat_id)) return 'linked_channel';
     }
-    const own=await member(chat,bot.id);
+    // These initial lookups are independent. Authority is still rechecked
+    // separately immediately before deletion and immediately before a ban.
+    const [own,initialMember]=await Promise.all([
+      member(chat,bot.id),
+      !message.sender_chat && userId(message.from?.id) ? member(chat,message.from.id) : null,
+    ]);
     if(!admin(own) || !own.can_delete_messages || !own.can_restrict_members) {
       await guards.records.health(chat,'missing_permissions',true,now);
-      const language=await store.getLanguage('group',chat);
+      const language=context.groupLanguage || 'sw';
       await notice(chat,language==='en' ? '🛡 Pilot is waiting for an admin to finish its permissions. The private bot guide has the next steps.' : '🛡 Pilot inasubiri admin akamilishe ruhusa zake. Mwongozo unapatikana kwenye bot faraghani.');
       return 'missing_permissions';
     }
     if(message.chat.type!=='supergroup') {
-      const language=await store.getLanguage('group',chat);
+      const language=context.groupLanguage || 'sw';
       await notice(chat,language==='en' ? '🛡 This group needs an admin to complete setup before timed moderation can begin. Open Pilot privately for guidance.' : '🛡 Group hili linahitaji admin akamilishe maandalizi kabla ya ban za muda kuanza. Fungua Pilot faraghani kwa mwongozo.');
       return 'requires_supergroup';
     }
-    const incidentId=`${chat}:${message.media_group_id ? `album:${message.media_group_id}` : `message:${message.message_id}`}`;
     if(message.sender_chat) {
       // Telegram does not disclose the person behind unrelated channel senders.
       // banChatSenderChat is permanent and wider than the requested timed policy.
-      let row=await store.incident(incidentId);
+      let row=snapshot.incident;
       if(row?.status==='channel_review') {
         await deleteMessage(message);
-        return await announcer.notify(row,message,false) ? 'notification_pending' : 'channel_review';
+        return await announcer.notify(row,message,false,context) ? 'notification_pending' : 'channel_review';
       }
       row=await store.plan({id:incidentId,chat_id:chat,user_id:null,message_id:message.message_id,event_at:time,created_at:now,strike:0,until_date:0,reasons:JSON.stringify(violation.reasons)});
       await deleteMessage(message);
       await store.status(row.id,'channel_review');
-      return await announcer.notify(row,message,false) ? 'notification_pending' : 'channel_review';
+      return await announcer.notify(row,message,false,context) ? 'notification_pending' : 'channel_review';
     }
     if(!userId(message.from?.id)) return 'unknown_sender';
     const user=message.from.id;
-    let live=await member(chat,user);
+    let live=initialMember;
     if(admin(live)) return 'admin';
-    const state=await store.member(chat,user);
-    let row=await store.incident(incidentId);
+    const state=snapshot.member;
+    let row=snapshot.incident;
     if(time<=state.override_at) return 'admin_override';
     if(row?.status==='cancelled') return 'cancelled';
     if(row && ['failed','review'].includes(row.status)) {
@@ -141,7 +148,7 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
       }
       if(row.status!=='confirmed') await store.confirm(row,now);
       await controlStore.audit({id:`incident:${row.id}`,chatId:chat,action:'ban_confirmed',targetId:user,incidentId:row.id,details:{strike:row.strike,until:row.until_date,reasons:violation.reasons},at:now});
-      return await announcer.notify(row,message) ? 'notification_pending' : 'confirmed';
+      return await announcer.notify(row,message,true,context) ? 'notification_pending' : 'confirmed';
     }
     if(live.status==='kicked') { await deleteMessage(message); return 'already_banned'; }
     // queued messages from the same offence episode cannot escalate the punishment.
@@ -178,24 +185,27 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
       return error.ambiguous===false ? 'failed' : 'uncertain';
     }
     await store.confirm(row,now);
-    await controlStore.audit({id:`incident:${row.id}`,chatId:chat,action:'ban_confirmed',targetId:user,incidentId:row.id,details:{strike:row.strike,until:row.until_date,reasons:violation.reasons},at:now});
     // Observe an immediate human override before announcing a continuing ban.
     // banChatMember already confirmed the completed action. A failed secondary
     // read must not discard its announcement; a verified human override still wins.
-    let after;
-    try { after=await member(chat,user); } catch { /* Preserve the confirmed action. */ }
+    const [,after]=await Promise.all([
+      controlStore.audit({id:`incident:${row.id}`,chatId:chat,action:'ban_confirmed',targetId:user,incidentId:row.id,details:{strike:row.strike,until:row.until_date,reasons:violation.reasons},at:now}),
+      member(chat,user).catch(()=>null),
+    ]);
     if(after && (after.status!=='kicked' || Number(after.until_date || 0)!==row.until_date)) {
       await store.override(chat,user,clock()); return 'admin_override';
     }
-    return await announcer.notify(row,message) ? 'notification_pending' : 'confirmed';
+    return await announcer.notify(row,message,true,context) ? 'notification_pending' : 'confirmed';
   }
 
   async function handle(update,{callbackAcknowledgementStarted=false}={}) {
     if(!Number.isSafeInteger(update?.update_id)) return {status:'ignored'};
-    if(await store.seen(update.update_id)) return {status:'duplicate'};
+    const context=await loadUpdateContext(db,update);
+    if(context.seen) return {status:'duplicate'};
     let status='ignored';
+    let groupObservation=null;
     if(update.callback_query) {
-      if(!await guards.callback(update.callback_query)) await experience.handleCallback(update.callback_query,update.update_id,{updateChecked:true,callbackAcknowledgementStarted});
+      if(!await guards.callback(update.callback_query)) await experience.handleCallback(update.callback_query,update.update_id,{updateChecked:true,callbackAcknowledgementStarted,context});
       status='callback';
     } else if(update.chat_join_request) {
       const request=update.chat_join_request;
@@ -209,16 +219,16 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
       status='membership';
     } else {
       const message=update.message || update.edited_message;
-      if(message && validId(message.chat?.id) && Number.isSafeInteger(message.message_id)) {
+      if(message && messageChat(message.chat) && Number.isSafeInteger(message.message_id)) {
         if(Number.isSafeInteger(message.ephemeral_message_id)&&message.ephemeral_message_id>0) {
           // Ephemeral IDs can be reused and ordinary message_id is zero. These
           // private commands must never create moderation cases or flood counts.
-          if(update.message&&(await toolCommands?.handle(message,update.update_id)||await experience.handleCommand(message,update.update_id,{updateChecked:true})))status='command';
+          if(update.message&&(await toolCommands?.handle(message,update.update_id,{context})||await experience.handleCommand(message,update.update_id,{updateChecked:true,context})))status='command';
         } else if(message.message_id>0) {
         // An edit is re-evaluated for violations but can never re-run an admin command.
         const isGroup=['group','supergroup'].includes(message.chat.type);
         if(isGroup && message.chat.id<0) {
-          await broadcastRecords.rememberGroup(message.chat.id,eventTime(message));
+          groupObservation={chat:message.chat.id,at:eventTime(message)};
           if(Number.isSafeInteger(message.migrate_to_chat_id) && message.migrate_to_chat_id<0) {
             await broadcastRecords.recordMembership(message.chat.id,'left',eventTime(message),update.update_id);
             await broadcastRecords.rememberGroup(message.migrate_to_chat_id,eventTime(message));
@@ -227,11 +237,14 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
             await broadcastRecords.recordMembership(message.migrate_from_chat_id,'left',eventTime(message),update.update_id);
           }
         }
-        const rules=isGroup ? await controlStore.rules(message.chat.id,clock()) : [];
+        // Additive group rules can only allow a link rejected by global policy.
+        // Text, commands, allowed URLs and forward-only messages need no lookup.
+        const needsRules=isGroup && analyzeMessage(message,[]).blockedLinks.length>0;
+        const rules=needsRules ? await controlStore.rules(message.chat.id,clock()) : [];
         const groupViolation=isGroup && analyzeMessage(message,rules).reasons.length>0;
         let optionalAction=null;
         if(isGroup && !groupViolation) {
-          const settings=await controlStore.settings(message.chat.id);
+          const settings=context.groupSettings;
           // Long slash codes are delete-only, including edits and captions. Run
           // this before flood counting so repeating them can never trigger mute.
           optionalAction=await guards.commandSpam(message,settings);
@@ -241,16 +254,20 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
           }
         }
         if(optionalAction) status=optionalAction;
-        else if(update.message && !groupViolation && (await toolCommands?.handle(message,update.update_id)||await experience.handleCommand(message,update.update_id,{updateChecked:true}))) status='command';
-        else status=await enforce(message,update,rules);
+        else if(update.message && !groupViolation && (await toolCommands?.handle(message,update.update_id,{context})||await experience.handleCommand(message,update.update_id,{updateChecked:true,context}))) status='command';
+        else status=await enforce(message,update,rules,context);
         if(isGroup&&['confirmed','command_spam','flood'].includes(status)&&!message.sender_chat)await observe({chatId:message.chat.id,userId:message.from?.id,kind:'spam',id:message.message_id,at:message.date});
         }
       }
     }
     // A ban can succeed while its HTTP response is lost. Telegram must retry
     // this update so we can reconcile membership without issuing another ban.
-    if(status==='uncertain' || status==='notification_pending' || status==='command_spam_retry') return {status,retry:true};
-    await store.done(update.update_id,clock());
+    if(status==='uncertain' || status==='notification_pending' || status==='command_spam_retry') {
+      if(groupObservation) await broadcastRecords.rememberGroup(groupObservation.chat,groupObservation.at);
+      return {status,retry:true};
+    }
+    if(groupObservation) await broadcastRecords.completeUpdate(groupObservation.chat,groupObservation.at,update.update_id,clock());
+    else await store.done(update.update_id,clock());
     return {status};
   }
   async function controlMutation(payload) {

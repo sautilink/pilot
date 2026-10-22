@@ -8,7 +8,7 @@ import { createOwnerAuth, OWNER_SCHEMA_SQL } from '../src/owner-auth.js';
 import { createBroadcastStore } from '../src/broadcast-store.js';
 import { createBotIdentity } from '../src/bot-identity.js';
 import { ensureSchemaFamily } from '../src/schema-ready.js';
-import { createRequestTiming, instrumentTelegram } from '../src/request-timing.js';
+import { createRequestTiming, instrumentTelegram, instrumentDatabase } from '../src/request-timing.js';
 
 function observed(db) {
   const prepared = [], batches = [];
@@ -246,7 +246,8 @@ test('timing separates queue and handler time and records API duration without r
   const api = instrumentTelegram({ async call(method, parameters) { assert.equal(parameters.text, 'private message'); now += 50; return true; } }, () => timing, () => now);
   await api.call('sendMessage', { chat_id: 123, text: 'private message', token: 'never log this' });
   now = 100; timing.finish();
-  assert.deepEqual(records, [{ route: 'telegram', outcome: 'ok', queue_ms: 30, handling_ms: 70, telegram_calls: 1, telegram_ms: 50 }]);
+  assert.deepEqual(records, [{ route: 'telegram', outcome: 'ok', queue_ms: 30, handling_ms: 70, telegram_calls: 1, telegram_ms: 50,
+    db_calls: 0, db_ms: 0, first_reply_ms: 80, first_action_ms: null, callback_ack_ms: null }]);
   assert.ok(!JSON.stringify(records).includes('private message'));
 });
 
@@ -269,4 +270,62 @@ test('timing instrumentation preserves Telegram failures and cannot fail the act
   const api = instrumentTelegram({ async call() { now += 10; throw failure; } }, () => timing, () => now);
   await assert.rejects(api.call('deleteMessage', { chat_id: 123 }), error => error === failure);
   assert.doesNotThrow(() => timing.finish('error'));
+});
+
+test('D1 instrumentation preserves batch transactions and counts network calls without SQL or values', async t => {
+  const db = await database(t), records = [];
+  let now = 0;
+  const timing = createRequestTiming('telegram', { now: () => now, sample: () => true, report: record => records.push(record) });
+  timing.start();
+  const binding = instrumentDatabase(db, () => timing, () => now++);
+  await binding.batch([
+    binding.prepare('INSERT INTO settings(key,value) VALUES(?,?)').bind('private_key','private_value'),
+    binding.prepare('SELECT value FROM settings WHERE key=?').bind('private_key'),
+  ]);
+  assert.equal(await binding.prepare('SELECT value FROM settings WHERE key=?').bind('private_key').first('value'),'private_value');
+  await assert.rejects(binding.batch([
+    binding.prepare('UPDATE settings SET value=? WHERE key=?').bind('must_roll_back','private_key'),
+    binding.prepare('INSERT INTO settings(key,value) VALUES(?,?)').bind('private_key','duplicate'),
+  ]), /UNIQUE/);
+  assert.equal(await db.prepare('SELECT value FROM settings WHERE key=?').bind('private_key').first('value'),'private_value');
+  timing.finish();
+  assert.equal(records[0].db_calls, 3, 'a two-statement batch is one database round trip');
+  assert.equal(records[0].db_ms, 3);
+  assert.doesNotMatch(JSON.stringify(records), /private_|SELECT|INSERT|UPDATE/);
+});
+
+test('visible latency is recorded only for confirmed replies and actions', async () => {
+  let now = 0; const records = [];
+  const timing = createRequestTiming('telegram', { now: () => now, sample: () => true, report: record => records.push(record) });
+  timing.start();
+  const api = instrumentTelegram({ async call(method) {
+    now += 20;
+    if (method === 'deleteMessage') throw new Error('uncertain outcome');
+    return method === 'banChatMember' ? false : true;
+  } }, () => timing, () => now);
+  await assert.rejects(api.call('deleteMessage'));
+  await api.call('banChatMember');
+  await api.call('answerCallbackQuery');
+  await api.call('editMessageText');
+  timing.finish();
+  assert.equal(records[0].first_action_ms, null);
+  assert.equal(records[0].callback_ack_ms, 60);
+  assert.equal(records[0].first_reply_ms, 80);
+});
+
+test('instrumented coordinators share stable identity through their underlying credential-scoped binding', async t => {
+  const db = await database(t); await saveIdentity(db);
+  const f = observed(db), api = { call() { throw new Error('unexpected Telegram call'); } };
+  const resolvers = Array.from({length:3}, () => createBotIdentity({
+    db: instrumentDatabase(f.binding, () => null), api, token: TOKEN,
+  }));
+  assert.ok((await Promise.all(resolvers.map(resolve=>resolve()))).every(identity=>identity.id===BOT.id));
+  assert.equal(f.prepared.length,1);
+});
+
+test('D1 instrumentation preserves schema readiness across coordinators sharing one binding', async t => {
+  const db = await database(t), f = observed(db);
+  for (let coordinator=0;coordinator<3;coordinator++) await ensureAll(instrumentDatabase(f.binding,()=>null));
+  assert.equal(f.prepared.length,1);
+  assert.equal(f.batches.length,0);
 });

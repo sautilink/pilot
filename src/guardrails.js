@@ -2,6 +2,7 @@ import {createGuardrailStore} from './guardrail-store.js';
 import {escapeHtml} from './policy.js';
 import {fillTemplate,memberName,publicGroupRules} from './templates.js';
 import {detectCommandSpam} from './command-spam.js';
+import {safeAuditDetails} from './control-store.js';
 
 const admin=role=>['creator','administrator'].includes(role?.status);
 const positive=id=>Number.isSafeInteger(Number(id)) && Number(id)>0;
@@ -42,11 +43,20 @@ export function createGuardrails({db,store,controlStore,api,clock,me,say}) {
     if(String(message.sender_chat?.id)===String(chat)) return 'anonymous_admin';
     if(!message.sender_chat && (message.from?.is_bot || !positive(message.from?.id))) return 'command_spam_exempt';
     if(!Number.isSafeInteger(date) || date<=0 || !Number.isSafeInteger(time) || time<=0 || date>now+60 || time>now+60 || now-date>=48*3600) return 'command_spam_stale';
-    const group=await store.group(chat);
-    if(!group.enabled || time<Math.max(group.activated_at,Number(await store.setting('ready_since') || 0))) return 'paused_or_old';
     const id=`commandspam:${chat}:${message.message_id}`;
     await records.ensure();
-    let previous=await records.first('SELECT status,created_at,updated_at FROM pilot_guard_actions WHERE id=?',id);
+    // Read this update's state together. These remain authoritative reads in the
+    // group queue; no admin roles, overrides or pause settings are cached.
+    const state=await db.batch([
+      db.prepare('INSERT OR IGNORE INTO groups(chat_id) VALUES(?)').bind(String(chat)),
+      db.prepare('SELECT * FROM groups WHERE chat_id=?').bind(String(chat)),
+      db.prepare("SELECT value FROM settings WHERE key='ready_since'"),
+      db.prepare('SELECT status,created_at,updated_at FROM pilot_guard_actions WHERE id=?').bind(id),
+      db.prepare('SELECT override_at FROM members WHERE chat_id=? AND user_id=?').bind(String(chat),String(message.from?.id || '')),
+    ]);
+    const group=state[1].results[0],activation=Number(state[2].results[0]?.value || 0),prior=state[4].results[0];
+    if(!group.enabled || time<Math.max(group.activated_at,activation)) return 'paused_or_old';
+    let previous=state[3].results[0];
     let retry=/^retry_([12])$/.exec(previous?.status || '');
     if(previous) {
       // created_at is this rule's source event time. An older webhook payload
@@ -61,20 +71,24 @@ export function createGuardrails({db,store,controlStore,api,clock,me,say}) {
     }
     const bot=await me(),user=message.sender_chat ? null : Number(message.from.id);
     if(user===Number(bot.id)) return 'self';
+    let own;
     if(message.sender_chat) {
       if(!Number.isSafeInteger(message.sender_chat.id) || message.sender_chat.id>=0) return 'command_spam_ignored';
       const info=await api.call('getChat',{chat_id:chat});
       if(String(info.linked_chat_id)===String(message.sender_chat.id)) return 'linked_channel';
     } else {
-      const live=await member(chat,user);
+      const [actorResult,ownResult]=await Promise.allSettled([member(chat,user),member(chat,bot.id)]);
+      if(actorResult.status==='rejected') throw actorResult.reason;
+      const live=actorResult.value;
       if(admin(live)) return 'admin';
       if(!['member','restricted'].includes(live.status)) return 'command_spam_inactive_member';
-      const prior=await store.first('SELECT override_at FROM members WHERE chat_id=? AND user_id=?',String(chat),String(user));
       if(prior && time<=prior.override_at) return 'admin_override';
+      if(ownResult.status==='rejected') throw ownResult.reason;
+      own=ownResult.value;
     }
     // This rule needs only delete permission. It never calls a restriction API,
     // creates a link/forward incident, or adds a member strike.
-    const own=await member(chat,bot.id);
+    own ||= await member(chat,bot.id);
     if(!admin(own) || !own.can_delete_messages) {
       await records.health(chat,'command_spam_action_failed',true,now);
       return 'command_spam_missing_permission';
@@ -120,9 +134,13 @@ export function createGuardrails({db,store,controlStore,api,clock,me,say}) {
         return 'command_spam_review';
       }
     }
-    await records.finish(id,'deleted',clock());
-    await records.health(chat,'command_spam_action_failed',false,clock());
-    await audit(id,chat,'command_spam_deleted',target,{action:'deleted',...detected});
+    await controlStore.ensure();
+    const finishedAt=clock();
+    await db.batch([
+      db.prepare("UPDATE pilot_guard_actions SET status='deleted',updated_at=?,telegram_message_id=NULL WHERE id=?").bind(finishedAt,id),
+      db.prepare("UPDATE pilot_health_events SET resolved_at=?,updated_at=? WHERE chat_id=? AND kind='command_spam_action_failed' AND resolved_at=0").bind(finishedAt,finishedAt,String(chat)),
+      db.prepare("INSERT OR IGNORE INTO pilot_audit(id,chat_id,actor_id,action,target_id,incident_id,details_json,created_at) VALUES(?,?,NULL,'command_spam_deleted',?,NULL,?,?)").bind(id,String(chat),String(target),JSON.stringify(safeAuditDetails({action:'deleted',...detected})),finishedAt),
+    ]);
     // Silent by design: repeated codes do not create repeated bot notices.
     return 'command_spam';
   }

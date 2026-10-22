@@ -77,6 +77,25 @@ test('tools links verify membership and never treat a deep-linked group ID as au
   await f.handle('/tools',{from:{id:ADMIN,is_bot:false,language_code:'en'}});assert.equal((await f.base.adminContext(ADMIN)).chat_id,String(GROUP));
 });
 
+test('tools reuse the admitted personal preference with their existing English fallback and no extra language query',async t=>{
+  const f=await fixture(t),prepare=f.db.prepare.bind(f.db);let languageReads=0,updateId=2000;
+  f.db.prepare=sql=>{if(/SELECT[\s\S]*FROM language_preferences/i.test(sql))languageReads++;return prepare(sql);};
+  for(const [stored,telegram,expected] of [
+    ['sw','en',/Ona vipengele vipya/],['en','sw',/See what is new/],
+    [null,'sw-TZ',/Ona vipengele vipya/],[null,'fr',/See what is new/],[null,undefined,/See what is new/],
+  ]){
+    await f.commands.handle(f.message('/changelog',{from:{id:MEMBER,is_bot:false,language_code:telegram}}),updateId++,{
+      context:{userLanguage:stored,groupLanguage:'sw'},
+    });
+    assert.match(f.sends().at(-1).params.text,expected);
+  }
+  assert.equal(languageReads,0);
+  await f.base.setLanguage('user',MEMBER,'sw',NOW);
+  await f.handle('/changelog');
+  assert.match(f.sends().at(-1).params.text,/Ona vipengele vipya/);
+  assert.equal(languageReads,1,'standalone tool handlers still load the stored preference');
+});
+
 test('other-bot commands are not executed, and ordinary link enforcement runs first',async t=>{
   const f=await fixture(t);
   assert.equal(await f.handle('/ask@OtherBot guide'),true);assert.equal(f.sends().length,0);

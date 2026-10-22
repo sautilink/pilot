@@ -61,7 +61,7 @@ export function noticeErrorKind(error) {
 }
 
 export function createAnnouncer({store,api,clock,controlStore}) {
-  async function notify(row,message,success=true) {
+  async function notify(row,message,success=true,context={}) {
     const record=await store.noticeRecord(row.id,clock());
     if(!record || ['sent','unknown','failed','cancelled'].includes(record.status)) return false;
     if(record.status==='sending') {
@@ -70,8 +70,8 @@ export function createAnnouncer({store,api,clock,controlStore}) {
       return false;
     }
     if(record.retry_at>clock()) return true;
-    const language=await store.getLanguage('group',message.chat.id);
-    const settings=controlStore ? await controlStore.settings(message.chat.id) : {};
+    const language=Object.hasOwn(context,'groupLanguage') ? context.groupLanguage || 'sw' : await store.getLanguage('group',message.chat.id);
+    const settings=context.groupSettings ?? (controlStore ? await controlStore.settings(message.chat.id) : {});
     const {rich,plain}=formatAnnouncement(row,message,success,language,settings);
     let usePlain=false;
     let thread=message.is_topic_message && Number.isSafeInteger(message.message_thread_id) ? message.message_thread_id : null;

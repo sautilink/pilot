@@ -5,6 +5,7 @@ import { handleFetch } from '../src/handler.js';
 import { applySchema, createStore } from '../src/store.js';
 import { TestD1 } from './helpers/d1.js';
 import { EXPERIENCE_VERSION } from '../src/bot-ui.js';
+import { WEBHOOK_VERSION } from '../src/experience-sync.js';
 import {createGuardrailStore} from '../src/guardrail-store.js';
 import {createOwnerAuth} from '../src/owner-auth.js';
 
@@ -292,7 +293,7 @@ test('authenticated callbacks route by their accessible message chat or safely f
   assert.equal(f.calls.length, 0, 'routing tests without a Worker context remain independent of migration');
 });
 
-test('a ready authenticated webhook subscribes to callbacks before forwarding its first private menu', async (t) => {
+for (const blockedMethod of ['getMe', 'setWebhook']) test(`a ready authenticated webhook forwards commands while metadata ${blockedMethod} is still pending`, async (t) => {
   const f = await fixture(t, { ready: true });
   const update = structuredClone(UPDATE);
   update.message.chat = { id: 101, type: 'private' };
@@ -300,15 +301,30 @@ test('a ready authenticated webhook subscribes to callbacks before forwarding it
   const post = () => request('/telegram/webhook', {
     method: 'POST', headers: { 'X-Telegram-Bot-Api-Secret-Token': SECRET }, body: JSON.stringify(update),
   });
-  assert.equal((await handleFetch(post(), f.env, f.ctx)).status, 200);
-  assert.ok(f.timeline.indexOf('setWebhook') < f.timeline.indexOf('forward'));
-  assert.equal(f.forwarded.length, 1);
-  await f.flush();
-  assert.equal(await createStore(f.db).setting('experience_version'), EXPERIENCE_VERSION);
+  let release, entered, timer;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const telegram = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    if (String(url).endsWith(`/${blockedMethod}`)) { entered(); await gate; }
+    return telegram(url, options);
+  };
+  try {
+    const response = await Promise.race([handleFetch(post(), f.env, f.ctx), new Promise(resolve => { timer = setTimeout(() => resolve(null), 1000); })]);
+    assert.ok(response, 'metadata latency must not hold the user command outside its coordinator');
+    assert.equal(response.status, 200);
+    await started;
+    assert.equal(f.forwarded.length, 1);
+    assert.equal(await createStore(f.db).setting('experience_version'), null);
+  } finally {
+    clearTimeout(timer); release(); await f.flush();
+  }
+  assert.equal(await createStore(f.db).setting('experience_webhook_version'), WEBHOOK_VERSION);
+  assert.equal(await createStore(f.db).setting('experience_version'), null, 'the bounded subscription phase does not claim profile completion');
   const count = f.calls.length;
   assert.equal((await handleFetch(post(), f.env, f.ctx)).status, 200);
   await f.flush();
-  assert.equal(f.calls.length, count, 'completed migration must not repeat on each user update');
+  assert.equal(f.calls.length, count, 'continuation cooldown prevents repeated background work for every arriving update');
 });
 
 test('a failed automatic metadata upgrade does not stop existing moderation or reveal credentials', async (t) => {
@@ -333,7 +349,7 @@ test('a failed automatic metadata upgrade does not stop existing moderation or r
 test('forced operator setup reapplies metadata without resetting readiness time or member punishment history', async (t) => {
   const f = await fixture(t, { ready: true });
   const store = createStore(f.db);
-  await store.settings({ experience_version: EXPERIENCE_VERSION });
+  await store.settings({ experience_version: EXPERIENCE_VERSION, experience_webhook_version: WEBHOOK_VERSION });
   await store.member(-1001001, 101);
   await store.run('UPDATE members SET strikes=2,active_until=?,episode_at=?,override_at=? WHERE chat_id=? AND user_id=?',
     1793188800, 1792584000, 1790000000, '-1001001', '101');
@@ -408,7 +424,7 @@ test('join requests and their signed-owner callbacks use the same group coordina
 test('a current webhook uses one settings request and observes readiness changes on the next update', async t => {
   const f = await fixture(t, { ready: true });
   const store = createStore(f.db);
-  await store.settings({ experience_version: EXPERIENCE_VERSION });
+  await store.settings({ experience_version: EXPERIENCE_VERSION, experience_webhook_version: WEBHOOK_VERSION });
   const prepared = [];
   const prepare = f.db.prepare.bind(f.db);
   f.db.prepare = sql => { prepared.push(sql); return prepare(sql); };
@@ -429,7 +445,7 @@ test('a current webhook uses one settings request and observes readiness changes
 
 test('a slow empty menu acknowledgement does not hold up coordinator processing', async t => {
   const f = await fixture(t, { ready: true });
-  await createStore(f.db).settings({ experience_version: EXPERIENCE_VERSION });
+  await createStore(f.db).settings({ experience_version: EXPERIENCE_VERSION, experience_webhook_version: WEBHOOK_VERSION });
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   const telegram = globalThis.fetch;
@@ -468,7 +484,7 @@ test('a slow empty menu acknowledgement does not hold up coordinator processing'
 
 test('external acknowledgement markers cannot suppress handling and special callbacks retain their own response path', async t => {
   const f = await fixture(t, { ready: true });
-  await createStore(f.db).settings({ experience_version: EXPERIENCE_VERSION });
+  await createStore(f.db).settings({ experience_version: EXPERIENCE_VERSION, experience_webhook_version: WEBHOOK_VERSION });
   for (const data of ['pilot:unknown', 'pilot:updates', 'pilot:broadcast:confirm:123']) {
     const update = { update_id: 702, callback_query: {
       id: 'special-callback', data, from: { id: 101 },

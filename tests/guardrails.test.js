@@ -38,6 +38,30 @@ async function fixture(t,settings={}) {
   };
 }
 
+test('an admin stays exempt when the independent bot role lookup fails',async t=>{
+  const f=await fixture(t);
+  f.hooks.set('getChatMember',params=>{
+    if(params.user_id===BOT) throw new Error('temporary bot role lookup failure');
+    return {status:'administrator'};
+  });
+  const result=await f.moderator.handle(f.message({text:'/AbCdEf1234567890AbCdEf1234567890AbCdEf1234567890AbCdEf1234567890'}));
+  assert.equal(result.status,'admin');
+  assert.equal(f.of('deleteMessage').length,0);
+  assert.equal(f.of('banChatMember').length,0);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) AS n FROM members').first()).n,0);
+});
+
+test('malformed group identifiers cannot enter moderation or fail the group settings path',async t=>{
+  const f=await fixture(t);
+  for(const id of [100123,'-100123',0]) {
+    const result=await f.moderator.handle(f.message({chat:{id,type:'supergroup'}}));
+    assert.equal(result.status,'ignored');
+  }
+  assert.equal(f.of('deleteMessage').length,0);
+  assert.equal(f.of('getChatMember').length,0);
+  assert.equal(f.of('sendMessage').length,0);
+});
+
 test('optional tools are off by default and do not change ordinary conversations',async t=>{
   const f=await fixture(t);
   for(let i=0;i<12;i++) await f.moderator.handle(f.message());

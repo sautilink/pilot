@@ -47,7 +47,7 @@ test('the real coordinator timing gate accepts every tools dispatch category',()
     timing.start();timing.finish();
   }
   assert.deepEqual(records.map(record=>record.route),['tools','tools_wake','integration']);
-  assert.ok(records.every(record=>Object.keys(record).sort().join(',')==='handling_ms,outcome,queue_ms,route,telegram_calls,telegram_ms'));
+  assert.ok(records.every(record=>Object.keys(record).sort().join(',')==='callback_ack_ms,db_calls,db_ms,first_action_ms,first_reply_ms,handling_ms,outcome,queue_ms,route,telegram_calls,telegram_ms'));
   assert.throws(()=>createRequestTiming('/tools?chat=-1001'),/invalid_timing_route/);
 });
 

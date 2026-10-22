@@ -57,6 +57,20 @@ export const CONTROL_DEFAULTS = Object.freeze({
   join_gate_enabled: false, join_gate_mode: 'review',
 });
 
+// Normalize the stored representation once, whether a caller reads an individual
+// setting row or obtains it in a request-scoped D1 batch. This is not a cache.
+export function normalizeGroupSettings(rowSettingsJson) {
+  let saved;
+  try { saved = JSON.parse(rowSettingsJson || '{}'); } catch { saved = {}; }
+  const settings = { ...CONTROL_DEFAULTS, ...Object.fromEntries(Object.entries(saved || {}).filter(([key]) => Object.hasOwn(CONTROL_DEFAULTS, key))) };
+  // Old group settings inherit the delete-only filter. Invalid manually
+  // stored values cannot turn into broad command exceptions or an action.
+  if (typeof settings.command_spam_enabled !== 'boolean') settings.command_spam_enabled = CONTROL_DEFAULTS.command_spam_enabled;
+  try { settings.command_spam_allowlist = normalizeCommandExceptions(settings.command_spam_allowlist); }
+  catch { settings.command_spam_allowlist = CONTROL_DEFAULTS.command_spam_allowlist; }
+  return settings;
+}
+
 export function safeAuditDetails(details = {}) {
   const clean = {};
   if (!details || typeof details !== 'object' || Array.isArray(details)) return clean;
@@ -79,15 +93,7 @@ export function createControlStore(db) {
     async settings(chat) {
       await ensure();
       const row = await first('SELECT settings_json FROM pilot_group_settings WHERE chat_id=?', String(chat));
-      let saved;
-      try { saved = JSON.parse(row?.settings_json || '{}'); } catch { saved = {}; }
-      const settings = { ...CONTROL_DEFAULTS, ...Object.fromEntries(Object.entries(saved || {}).filter(([key]) => Object.hasOwn(CONTROL_DEFAULTS, key))) };
-      // Old group settings inherit the delete-only filter. Invalid manually
-      // stored values cannot turn into broad command exceptions or an action.
-      if (typeof settings.command_spam_enabled !== 'boolean') settings.command_spam_enabled = CONTROL_DEFAULTS.command_spam_enabled;
-      try { settings.command_spam_allowlist = normalizeCommandExceptions(settings.command_spam_allowlist); }
-      catch { settings.command_spam_allowlist = CONTROL_DEFAULTS.command_spam_allowlist; }
-      return settings;
+      return normalizeGroupSettings(row?.settings_json);
     },
     async rules(chat, now = Math.floor(Date.now()/1000)) {
       await ensure();

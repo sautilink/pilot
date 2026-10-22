@@ -539,6 +539,75 @@ test('trusted update admission avoids a duplicate lookup while standalone handle
   assert.equal(sent(f).length, 1, 'a replay through a standalone handler still cannot send');
 });
 
+test('fresh update language snapshots preserve personal and group fallbacks without repeated preference reads', async t => {
+  const f = await fixture(t);
+  f.store.getLanguage = async () => assert.fail('the admitted update already read language preferences');
+  let updateId = 1000;
+  for (const [stored, telegram, expected] of [
+    ['sw', 'en-GB', 'sw'], ['en', 'sw', 'en'],
+    [null, 'en-GB', 'en'], [null, 'fr', 'sw'], [null, undefined, 'sw'],
+  ]) {
+    const from = { id: USER, first_name: 'Juma', is_bot: false, language_code: telegram };
+    const options = { updateChecked: true, context: { userLanguage: stored, groupLanguage: null } };
+    await f.experience.handleCommand(privateMessage('/help', USER, { from }), updateId++, options);
+    assert.equal(sent(f).at(-1).params.text, renderBotPage('help', { language: expected, firstName: 'Juma', username: identity.username }).text);
+    await f.experience.handleCallback(callback('pilot:about', USER, { from }), updateId++, options);
+    assert.equal(f.api.callsOf('editMessageText').at(-1).params.text, renderBotPage('about', { language: expected, firstName: 'Juma', username: identity.username }).text);
+  }
+  for (const [groupLanguage, expected] of [[null, /Fungua SautiLink Pilot faraghani/], ['en', /Open SautiLink Pilot privately/]]) {
+    const options = { updateChecked: true, context: { userLanguage: 'en', groupLanguage } };
+    await f.experience.handleCommand(groupMessage('/help'), updateId++, options);
+    assert.match(sent(f).at(-1).params.text, expected);
+    await f.experience.handleCallback(callback('pilot:help', USER, {
+      message: { message_id: 55, chat: { id: GROUP, type: 'supergroup' }, from: identity },
+    }), updateId++, options);
+    assert.match(sent(f).at(-1).params.text, expected);
+  }
+});
+
+test('current group snapshots cover rules, status and delivery fallbacks without replacing fresh admin checks', async t => {
+  const f = await fixture(t);
+  f.store.getLanguage = async () => assert.fail('a current group reply must reuse the update snapshot');
+  let settingsReads = 0;
+  const experience = createBotExperience({ db: f.db, store: f.store, api: f.api, clock: () => NOW,
+    controlStore: { async settings() { settingsReads++; return { rules_en: 'Unexpected extra read' }; } },
+  });
+  const options = { updateChecked: true, context: {
+    userLanguage: 'sw', groupLanguage: 'en', groupSettings: { rules_en: 'Be <kind> & helpful' },
+  } };
+  await experience.handleCommand(groupMessage('/rules', USER), 1100, options);
+  assert.match(sent(f).at(-1).params.text, /Additional group rules/);
+  assert.match(sent(f).at(-1).params.text, /Be &lt;kind&gt; &amp; helpful/);
+  assert.equal(settingsReads, 0);
+
+  f.api.hooks.set('sendMessage', (params, api) => {
+    if (params.chat_id === ADMIN) throw new TelegramError('private chat blocked', 403, false);
+    return { message_id: api.nextMessage++, chat: { id: params.chat_id } };
+  });
+  await experience.handleCommand(groupMessage('/status'), 1101, options);
+  assert.equal(f.api.callsOf('getChatMember').filter(call => call.params.user_id === ADMIN).length, 1);
+  assert.equal(f.api.callsOf('getChatMember').filter(call => call.params.user_id === BOT).length, 1);
+  assert.equal(sent(f).at(-1).params.chat_id, GROUP);
+  assert.match(sent(f).at(-1).params.text, /Open the private panel/);
+
+  f.api.member(GROUP, ADMIN, 'member');
+  await experience.handleCommand(groupMessage('/pause'), 1102, options);
+  assert.equal(f.api.callsOf('getChatMember').filter(call => call.params.user_id === ADMIN).length, 2);
+  assert.match(sent(f).at(-1).params.text, /available to this group’s admins/);
+  assert.equal((await f.store.group(GROUP)).enabled, 1);
+});
+
+test('a group language change uses its new value immediately for anonymous admin pointers', async t => {
+  const f = await fixture(t);
+  f.store.getLanguage = async () => assert.fail('changing language must not reread the old snapshot');
+  await f.experience.handleCommand(groupMessage('/language en', ADMIN, {
+    sender_chat: { id: GROUP, type: 'supergroup' },
+    from: { id: 1087968824, is_bot: true, first_name: 'GroupAnonymousBot' },
+  }), 1103, { updateChecked: true, context: { userLanguage: null, groupLanguage: 'sw' } });
+  assert.equal((await f.store.first("SELECT language FROM language_preferences WHERE scope='group' AND subject_id=?", String(GROUP))).language, 'en');
+  assert.match(sent(f).at(-1).params.text, /Open the private panel/);
+});
+
 test('early callback acknowledgement does not replace fresh admin checks or disclose another private chat', async t => {
   const f = await fixture(t);
   const admitted = { updateChecked: true, callbackAcknowledgementStarted: true };

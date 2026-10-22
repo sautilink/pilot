@@ -1,5 +1,6 @@
 // Stable bot identity can be reused; member/administrator permissions cannot.
 // Entries are scoped to the actual DB binding, complete token and expected bot.
+import { databaseIdentity } from './request-timing.js';
 const bindings = new WeakMap();
 const MAX_IDENTITIES = 4;
 const TTL_MS = 5 * 60 * 1000;
@@ -11,8 +12,9 @@ export function createBotIdentity({ db, api, token, expectedUsername = 'sautilin
   const username = String(expectedUsername).toLowerCase();
   if (!Number.isSafeInteger(id) || id <= 0 || !/^[a-z][a-z0-9_]{4,31}$/.test(username)) throw new TypeError('invalid_bot_identity_configuration');
   const key = `${token}\n${username}`;
-  let cache = bindings.get(db);
-  if (!cache) { cache = new Map(); bindings.set(db, cache); }
+  const cacheKey = databaseIdentity(db);
+  let cache = bindings.get(cacheKey);
+  if (!cache) { cache = new Map(); bindings.set(cacheKey, cache); }
   return async () => {
     const now = clock(), previous = cache.get(key);
     if (previous && previous.expiresAt > now) return previous.promise;

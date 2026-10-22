@@ -137,9 +137,17 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
   }));
   const peer = message => message.chat?.type === 'private' && userId(message.from?.id) && Number(message.from.id) === Number(message.chat.id) && !message.sender_chat;
   const anonymous = message => isGroup(message.chat) && String(message.sender_chat?.id) === String(message.chat.id);
-  const userLanguage = from => store.getLanguage('user', from.id, /^en(?:-|$)/i.test(from.language_code || '') ? 'en' : 'sw');
-  const groupLanguage = chat => store.getLanguage('group', chat, 'sw');
-  const replyLanguage = message => !anonymous(message) && userId(message.from?.id) ? userLanguage(message.from) : groupLanguage(message.chat.id);
+  const userLanguage = (from, updateContext) => {
+    const fallback = /^en(?:-|$)/i.test(from.language_code || '') ? 'en' : 'sw';
+    return Object.hasOwn(updateContext || {}, 'userLanguage')
+      ? (['sw', 'en'].includes(updateContext.userLanguage) ? updateContext.userLanguage : fallback)
+      : store.getLanguage('user', from.id, fallback);
+  };
+  const groupLanguage = (chat, updateContext) => Object.hasOwn(updateContext || {}, 'groupLanguage')
+    ? (['sw', 'en'].includes(updateContext.groupLanguage) ? updateContext.groupLanguage : 'sw')
+    : store.getLanguage('group', chat, 'sw');
+  const replyLanguage = (message, updateContext, currentGroupLanguage) => !anonymous(message) && userId(message.from?.id)
+    ? userLanguage(message.from, updateContext) : currentGroupLanguage;
   const context = (bot, from, language) => ({ username: bot.username, firstName: from?.first_name, language, appUrl });
   const features = createFeatureCommands({ store, control, dispatchControl, appUrl });
   const broadcasts = createBroadcastCommands({ store, api, owner, dispatchBroadcast, clock, me: identity, send });
@@ -168,8 +176,7 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     } catch { /* A recorded command must not be replayed because logging failed. */ }
   }
 
-  async function pointer(message, bot, manage = false) {
-    const language = await groupLanguage(message.chat.id);
+  async function pointer(message, bot, language, manage = false) {
     if(Number.isSafeInteger(message.ephemeral_message_id)&&!message.sender_chat&&userId(message.from?.id)) {
       return sendPrivateReply({api,message,text:textFor(language,manage?'panelPointer':'publicPointer'),extra:{reply_markup:manage?panelMarkup(bot,message.chat.id,language):{inline_keyboard:[[{text:textFor(language,'openPilot'),url:link(bot)}]]}},clock});
     }
@@ -189,13 +196,13 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     catch { return false; }
   }
 
-  async function privateReply(message, bot, text, extra = {}) {
+  async function privateReply(message, bot, text, language, extra = {}) {
     if (message.chat.type === 'private') return quietSend(message.chat.id, text, extra);
     // sender_chat's compatibility user is never a private recipient.
-    if (anonymous(message) || message.sender_chat || !userId(message.from?.id)) return pointer(message, bot, true);
+    if (anonymous(message) || message.sender_chat || !userId(message.from?.id)) return pointer(message, bot, language, true);
     const delivered = Number.isSafeInteger(message.ephemeral_message_id)
       ? await sendPrivateReply({api,message,text,extra,clock}) : await quietSend(message.from.id,text,extra);
-    if (!delivered) await pointer(message, bot, true);
+    if (!delivered) await pointer(message, bot, language, true);
     return delivered;
   }
 
@@ -231,16 +238,16 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     return { chat: result.chat };
   }
 
-  async function adminPage(page, bot, from, chat, language) {
+  async function adminPage(page, bot, from, chat, language, currentGroupLanguage) {
     const view = { ...context(bot, from, language), groupId: chat.id, groupTitle: chat.title, groupType: chat.type };
     if (page === 'status') {
-      const group = await store.group(chat.id);
-      let own;
-      try { own = await member(chat.id, bot.id); } catch { own = null; }
-      const notice = await store.latestNotice(chat.id);
+      const [group, own, notice, selectedGroupLanguage] = await Promise.all([
+        store.group(chat.id), Promise.resolve().then(() => member(chat.id, bot.id)).catch(() => null),
+        store.latestNotice(chat.id), currentGroupLanguage || groupLanguage(chat.id),
+      ]);
       Object.assign(view, {
         moderationEnabled: !!group.enabled,
-        groupLanguage: await groupLanguage(chat.id),
+        groupLanguage: selectedGroupLanguage,
         permissionsComplete: isAdmin(own) && !!own.can_delete_messages && !!own.can_restrict_members,
         noticeSummary: noticeSummary(notice, language),
       });
@@ -252,21 +259,30 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     return quietSend(message.chat.id, view.text, { reply_markup: view.reply_markup });
   }
 
-  async function privatePage(page, bot, from, language) {
+  async function privatePage(page, bot, from, language, updateContext) {
     const view = context(bot, from, language);
-    if (page === 'home' && await broadcasts.isOwner(from)) view.isOwner = true;
+    if (page === 'home') {
+      // This snapshot controls a navigation button only. Broadcast actions still authorize freshly.
+      const ownerVisible = updateContext?.ownerChecked === true
+        ? Number.isSafeInteger(from?.id) && from.id > 0 && !from.is_bot && String(from.id) === updateContext.ownerId
+        : await broadcasts.isOwner(from);
+      if (ownerVisible) view.isOwner = true;
+    }
     return renderBotPage(page, view);
   }
 
-  async function handleCommand(message, updateId, { updateChecked = false } = {}) {
-    if (await broadcasts.handleMessage(message, updateId)) return true;
+  async function handleCommand(message, updateId, { updateChecked = false, context: updateContext } = {}) {
+    if (await broadcasts.handleMessage(message, updateId, { updateChecked, context: updateContext })) return true;
     const match = String(message.text || '').match(commandPattern);
     if (!match) return false;
-    const bot = await identity(), command = match[1].toLowerCase(), argument = match[3]?.trim();
-    if (match[2] && match[2].toLowerCase() !== String(bot.username).toLowerCase()) return true;
+    const command = match[1].toLowerCase(), argument = match[3]?.trim();
     if (updateChecked !== true && Number.isSafeInteger(updateId) && await store.seen(updateId)) return true;
-    let language = message.chat.type === 'private' && peer(message)
-      ? await userLanguage(message.from) : await groupLanguage(message.chat.id);
+    const [bot, initialLanguage] = await Promise.all([
+      identity(), message.chat.type === 'private' && peer(message)
+        ? userLanguage(message.from, updateContext) : groupLanguage(message.chat.id, updateContext),
+    ]);
+    if (match[2] && match[2].toLowerCase() !== String(bot.username).toLowerCase()) return true;
+    let language = initialLanguage;
 
     const featureCommand = FEATURE_COMMANDS.has(command) ? command
       : command === 'start' && ['dashboard', 'checklink', 'mystatus', 'appeal'].includes(argument) ? argument : null;
@@ -279,13 +295,13 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
             if (!anonymous(message)) await store.setAdminContext(message.from.id, message.chat.id, clock());
             if(!anonymous(message)&&Number.isSafeInteger(message.ephemeral_message_id)) {
               const view=await features.render({command:featureCommand,argument:argument||'',from:message.from,language,updateId,groupId:message.chat.id});
-              await privateReply(message,bot,view.text,{reply_markup:view.reply_markup});
-            } else await pointer(message, bot, true);
+              await privateReply(message,bot,view.text,language,{reply_markup:view.reply_markup});
+            } else await pointer(message, bot, language, true);
           } else await quietSend(message.chat.id, textFor(language, 'denied'));
         } else if(!message.sender_chat&&userId(message.from?.id)&&Number.isSafeInteger(message.ephemeral_message_id)) {
           const view=await features.render({command:featureCommand,argument:argument||'',from:message.from,language,updateId,groupId:message.chat.id});
-          await privateReply(message,bot,view.text,{reply_markup:view.reply_markup});
-        } else await pointer(message, bot);
+          await privateReply(message,bot,view.text,language,{reply_markup:view.reply_markup});
+        } else await pointer(message, bot, language);
       }
       return true;
     }
@@ -311,19 +327,19 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
         const page = command === 'start'
           ? (argument === 'howitworks' ? 'how' : publicStartPages.has(argument) ? argument : 'home')
           : pages[command];
-        if (peer(message)) await sendPage(message, await privatePage(page, bot, message.from, language));
+        if (peer(message)) await sendPage(message, await privatePage(page, bot, message.from, language, updateContext));
       } else if (isGroup(message.chat)) {
         if (command === 'rules') {
           let rules = renderBotPage('rules', context(bot, null, language)).text;
-          if (controlStore?.settings) {
-            const settings = await controlStore.settings(message.chat.id);
+          if (updateContext?.groupSettings || controlStore?.settings) {
+            const settings = updateContext?.groupSettings || await controlStore.settings(message.chat.id);
             const extra = String(settings[`rules_${language}`] || '').slice(0, 600);
             if (extra) rules += `\n\n<b>${language === 'en' ? 'Additional group rules' : 'Sheria za ziada za group'}</b>\n${escapeHtml(extra)}`;
           }
           await quietSend(message.chat.id, rules, {
             reply_markup: { inline_keyboard: [[{ text: textFor(language, 'privateHelp'), url: link(bot) }]] },
           });
-        } else await pointer(message, bot);
+        } else await pointer(message, bot, language);
       }
       return true;
     }
@@ -353,24 +369,25 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
       return true;
     }
     const chat = message.chat.id;
-    const personalLanguage = await replyLanguage(message);
-    if (command === 'admin') { await pointer(message, bot, true); return true; }
+    if (command === 'admin') { await pointer(message, bot, language, true); return true; }
+    const personalLanguage = await replyLanguage(message, updateContext, language);
     if (command === 'language') {
       if (!['sw', 'en'].includes(argument)) {
-        await privateReply(message, bot, textFor(personalLanguage, 'groupLanguageUsage'));
+        await privateReply(message, bot, textFor(personalLanguage, 'groupLanguageUsage'), language);
       } else {
         await store.setLanguage('group', chat, argument, clock());
+        language = argument;
         if (Number.isSafeInteger(updateId)) await store.done(updateId, clock());
         await audit(message, updateId, 'language', null, { language: argument });
-        await privateReply(message, bot, textFor(personalLanguage, 'groupLanguageSaved', { language: argument === 'en' ? 'English' : 'Kiswahili' }));
+        await privateReply(message, bot, textFor(personalLanguage, 'groupLanguageSaved', { language: argument === 'en' ? 'English' : 'Kiswahili' }), language);
       }
       return true;
     }
     if (command === 'status') {
-      if (anonymous(message)) { await pointer(message, bot, true); return true; }
+      if (anonymous(message)) { await pointer(message, bot, language, true); return true; }
       await store.setAdminContext(message.from.id, chat, clock());
-      const view = await adminPage('status', bot, message.from, message.chat, personalLanguage);
-      await privateReply(message, bot, view.text, { reply_markup: view.reply_markup });
+      const view = await adminPage('status', bot, message.from, message.chat, personalLanguage, language);
+      await privateReply(message, bot, view.text, language, { reply_markup: view.reply_markup });
       return true;
     }
     if (command === 'testnotice') {
@@ -390,7 +407,7 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
           : textFor(personalLanguage, 'demoUnknown');
       }
       await audit(message, updateId, 'test_notice', null, { status: deliveryStatus });
-      await privateReply(message, bot, outcome);
+      await privateReply(message, bot, outcome, language);
       return true;
     }
     await store.group(chat);
@@ -401,18 +418,18 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
         db.prepare('INSERT OR IGNORE INTO processed_updates VALUES(?,?)').bind(updateId, clock()),
       ]);
       await audit(message, updateId, command);
-      await privateReply(message, bot, textFor(personalLanguage, command === 'resume' ? 'resumed' : 'paused'));
+      await privateReply(message, bot, textFor(personalLanguage, command === 'resume' ? 'resumed' : 'paused'), language);
       return true;
     }
     // Never attribute a channel's compatibility user to a real person.
     const target = argument || (!message.reply_to_message?.sender_chat && message.reply_to_message?.from?.id);
     if (!userId(target) || !/^\d+$/.test(String(target))) {
-      await privateReply(message, bot, textFor(personalLanguage, 'targetUsage', { command }));
+      await privateReply(message, bot, textFor(personalLanguage, 'targetUsage', { command }), language);
       return true;
     }
     const state = await store.member(chat, target);
     if (command === 'strikes') {
-      await privateReply(message, bot, `<b>${escapeHtml(message.chat.title || textFor(personalLanguage, 'group'))}</b>\n${textFor(personalLanguage, 'strikes', { user: Number(target), strikes: state.strikes })}`);
+      await privateReply(message, bot, `<b>${escapeHtml(message.chat.title || textFor(personalLanguage, 'group'))}</b>\n${textFor(personalLanguage, 'strikes', { user: Number(target), strikes: state.strikes })}`, language);
       return true;
     }
     if (!Number.isSafeInteger(updateId)) return true;
@@ -425,22 +442,22 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
       }
       catch {
         await audit(message, updateId, 'member_unban_unknown', target);
-        await privateReply(message, bot, textFor(personalLanguage, 'unbanUnknown'));
+        await privateReply(message, bot, textFor(personalLanguage, 'unbanUnknown'), language);
         return true;
       }
       await store.override(chat, target, clock(), false);
       await audit(message, updateId, 'member_unban', target);
-      await privateReply(message, bot, textFor(personalLanguage, 'unbanned'));
+      await privateReply(message, bot, textFor(personalLanguage, 'unbanned'), language);
       return true;
     }
     await store.override(chat, target, clock(), true, updateId);
     await audit(message, updateId, 'strikes_reset', target);
-    await privateReply(message, bot, textFor(personalLanguage, 'forgiven'));
+    await privateReply(message, bot, textFor(personalLanguage, 'forgiven'), language);
     return true;
   }
 
-  async function handleCallback(query, updateId, { updateChecked = false, callbackAcknowledgementStarted = false } = {}) {
-    if (await broadcasts.handleCallback(query, updateId)) return true;
+  async function handleCallback(query, updateId, { updateChecked = false, callbackAcknowledgementStarted = false, context: updateContext } = {}) {
+    if (await broadcasts.handleCallback(query, updateId, { updateChecked, context: updateContext })) return true;
     const match = String(query?.data || '').match(/^pilot:([a-z]+)(?::(sw|en))?$/);
     if (!isMenuCallback(query)) return false;
     // Stop Telegram's spinner before any group authorization/network lookup.
@@ -450,14 +467,17 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     const message = query.message;
     if (!message?.chat || !userId(query.from?.id)) return true;
     if (updateChecked !== true && Number.isSafeInteger(updateId) && await store.seen(updateId)) return true;
-    const bot = await identity();
+    const group = isGroup(message.chat);
+    if (!group && (message.chat.type !== 'private' || Number(query.from.id) !== Number(message.chat.id) || !Number.isSafeInteger(message.message_id))) return true;
+    const [bot, initialLanguage] = await Promise.all([
+      identity(), group ? groupLanguage(message.chat.id, updateContext) : userLanguage(query.from, updateContext),
+    ]);
     if (message.from && Number(message.from.id) !== Number(bot.id)) return true;
-    if (isGroup(message.chat)) {
-      await pointer(message, bot);
+    if (group) {
+      await pointer(message, bot, initialLanguage);
       return true;
     }
-    if (message.chat.type !== 'private' || Number(query.from.id) !== Number(message.chat.id) || !Number.isSafeInteger(message.message_id)) return true;
-    let language = await userLanguage(query.from);
+    let language = initialLanguage;
     let view;
     if (match[1] === 'lang') {
       language = match[2];
@@ -468,7 +488,7 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     } else if (match[1] === 'admin' || match[1] === 'status') {
       const choice = await selected(query.from.id, bot, query.from, language);
       view = choice.page || await adminPage(match[1], bot, query.from, choice.chat, language);
-    } else view = await privatePage(match[1], bot, query.from, language);
+    } else view = await privatePage(match[1], bot, query.from, language, updateContext);
     try {
       await api.call('editMessageText', {
         chat_id: message.chat.id, message_id: message.message_id, text: view.text,

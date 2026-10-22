@@ -50,6 +50,11 @@ export function createBroadcastStore(db) {
   const run = (sql, ...values) => db.prepare(sql).bind(...values).run();
   const all = async (sql, ...values) => (await db.prepare(sql).bind(...values).all()).results || [];
   const ensure = () => ensureSchemaFamily(db, 'broadcast', BROADCAST_SCHEMA_SQL);
+  const observation = (chat, at) => {
+    if (!chatId(chat) || !timestamp(at)) throw new TypeError('invalid_group_observation');
+    // Seeing a message never overrides a newer membership/disconnection event.
+    return db.prepare("INSERT INTO pilot_broadcast_groups(chat_id,status,observed_at) VALUES(?,'unknown',?) ON CONFLICT(chat_id) DO UPDATE SET status='unknown',telegram_status=NULL,updated_at=excluded.observed_at,event_id=0,observed_at=excluded.observed_at WHERE pilot_broadcast_groups.status='disconnected' AND excluded.observed_at>pilot_broadcast_groups.updated_at").bind(String(chat), at);
+  };
   return {
     ensure, first, run, all,
     async rememberGroup(chat, at) {
@@ -57,7 +62,18 @@ export function createBroadcastStore(db) {
       await ensure();
       // Normal messages do not rewrite an active registry row. Only evidence
       // newer than a disconnect can reopen discovery, still requiring preflight.
-      return run("INSERT INTO pilot_broadcast_groups(chat_id,status,observed_at) VALUES(?,'unknown',?) ON CONFLICT(chat_id) DO UPDATE SET status='unknown',telegram_status=NULL,updated_at=excluded.observed_at,event_id=0,observed_at=excluded.observed_at WHERE pilot_broadcast_groups.status='disconnected' AND excluded.observed_at>pilot_broadcast_groups.updated_at", String(chat), at);
+      return observation(chat, at).run();
+    },
+    async completeUpdate(chat, at, updateId, now) {
+      if (!timestamp(updateId) || !timestamp(now)) throw new TypeError('invalid_completed_update');
+      const observed = observation(chat, at);
+      await ensure();
+      // Discovery is bookkeeping, not a precondition for responding. Commit it
+      // with durable deduplication only after the update's actual work succeeds.
+      return db.batch([
+        observed,
+        db.prepare('INSERT OR IGNORE INTO processed_updates VALUES(?,?)').bind(updateId, now),
+      ]);
     },
     async recordMembership(chat, telegramStatus, at, updateId = 0) {
       if (!chatId(chat) || !timestamp(at) || !timestamp(updateId) || !['creator','administrator','member','restricted','left','kicked'].includes(telegramStatus)) throw new TypeError('invalid_membership');

@@ -111,7 +111,12 @@ const COPY = {
   },
 };
 const button = (text, action, id) => ({ text, callback_data: `pilot:bc:${action}${id ? `:${id}` : ''}` });
-const languageOf = (store, from) => store.getLanguage('user', from.id, /^en(?:-|$)/i.test(from.language_code || '') ? 'en' : 'sw');
+const languageOf = (store, from, context) => {
+  const fallback = /^en(?:-|$)/i.test(from.language_code || '') ? 'en' : 'sw';
+  return Object.hasOwn(context || {}, 'userLanguage')
+    ? (['sw', 'en'].includes(context.userLanguage) ? context.userLanguage : fallback)
+    : store.getLanguage('user', from.id, fallback);
+};
 const formattedTime = (time, language) => positive(time) ? new Intl.DateTimeFormat(language === 'en' ? 'en-GB' : 'sw-TZ', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Africa/Dar_es_Salaam' }).format(Number(time) * 1000) + ' EAT' : '—';
 
 export function createBroadcastCommands({ store, api, owner, dispatchBroadcast, clock = () => Math.floor(Date.now() / 1000), me, send }) {
@@ -204,12 +209,12 @@ export function createBroadcastCommands({ store, api, owner, dispatchBroadcast, 
     await reply(actor, denied ? t.denied : ['unsupported_content', 'invalid_content'].includes(error?.code) ? t.unsupported : stale ? t.stale : t.unavailable, denied ? [] : navigation(t));
   }
 
-  async function handleMessage(message, updateId) {
+  async function handleMessage(message, updateId, { updateChecked = false, context } = {}) {
     const match = String(message?.text || '').match(commandPattern);
     if (!match && /^\//.test(String(message?.text || ''))) return false; // Commands are never draft content.
     if (!realPeer(message) || message.edit_date) return !!match;
-    if (Number.isSafeInteger(updateId) && await store.seen(updateId)) return !!match;
-    const actor = actorFor(message.from, message.chat), language = await languageOf(store, message.from), t = COPY[language];
+    if (updateChecked !== true && Number.isSafeInteger(updateId) && await store.seen(updateId)) return !!match;
+    const actor = actorFor(message.from, message.chat), language = await languageOf(store, message.from, context), t = COPY[language];
     if (match?.[2] && match[2].toLowerCase() !== String((await identity()).username).toLowerCase()) return true;
     const command = match?.[1].toLowerCase(), argument = match?.[4] || '';
     if (command === 'myid') { await reply(actor, `${t.myId}: <code>${actor.id}</code>`); return true; }
@@ -244,15 +249,15 @@ export function createBroadcastCommands({ store, api, owner, dispatchBroadcast, 
     return true;
   }
 
-  async function handleCallback(query, updateId) {
+  async function handleCallback(query, updateId, { updateChecked = false, context } = {}) {
     const match = String(query?.data || '').match(callbackPattern);
     if (!match) return false;
     // Close the spinner even for unusable or copied callback buttons.
     try { await api.call('answerCallbackQuery', { callback_query_id: query.id }); } catch { /* Expired acknowledgements disclose nothing. */ }
     const message = query.message;
     if (!message || !realPeer({ ...message, from: query.from }) || !Number.isSafeInteger(message.message_id) || message.message_id <= 0 || message.date === 0 || message.from?.is_bot !== true || !Number.isSafeInteger(message.from?.id) || message.from.id !== (await identity()).id) return true;
-    if (Number.isSafeInteger(updateId) && await store.seen(updateId)) return true;
-    const actor = actorFor(query.from, message.chat), language = await languageOf(store, query.from), t = COPY[language];
+    if (updateChecked !== true && Number.isSafeInteger(updateId) && await store.seen(updateId)) return true;
+    const actor = actorFor(query.from, message.chat), language = await languageOf(store, query.from, context), t = COPY[language];
     if (!await isOwner(actor)) { await reply(actor, t.denied); return true; }
     const [, action, id] = match;
     if (['panel', 'compose', 'stop'].includes(action) ? !!id : !id) return true;
