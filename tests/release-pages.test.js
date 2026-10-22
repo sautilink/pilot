@@ -53,7 +53,8 @@ test('developer examples use the current scoped API and placeholders without aut
   assert.ok(html.includes('20 new drafts per token in a rolling 24 hours'));
   assert.ok(html.includes('up to 50 pending drafts per group'));
   assert.ok(html.includes('the creator must still be an admin'));
-  assert.ok(html.includes('Pilot stores a hash of the credential.'));
+  assert.ok(html.includes('Expired or revoked credentials stop working'));
+  assert.doesNotMatch(html, /GitHub|github\.com|Pilot stores a hash|D1|Durable Object/);
   assert.ok(!/slp_[a-f0-9]{32}\.[a-f0-9]{64}/.test(html));
   const examples = [...html.matchAll(/<pre[^>]*><code>([\s\S]*?)<\/code><\/pre>/g)];
   assert.equal(examples.length, 2); for (const [, value] of examples) assert.ok(!value.includes('<script'));
@@ -62,11 +63,17 @@ test('developer examples use the current scoped API and placeholders without aut
 test('release notes describe delivered tools and safeguards; roadmap labels ideas without promised dates', () => {
   const updates = renderReleasePage('updates'), roadmap = renderReleasePage('roadmap');
   assert.ok(updates.includes('<time datetime="2026-10-22">22 October 2026</time>'));
-  for (const term of ['/flag', '/ask', 'Events and RSVPs', 'Curated highlights', 'Presets', 'expiry', 'Raid signals', 'Scoped developer access']) assert.ok(updates.includes(term));
+  for (const term of ['/connect', '/doctor', '/policytest', '/support', '/communities', '/flag', '/ask', 'Events and RSVPs', 'waiting list', 'private reminders', 'Curated highlights', 'Presets', 'expiry', 'Raid signals', 'Scoped developer access']) assert.ok(updates.includes(term));
   assert.ok(updates.includes('Reports never create automatic strikes or bans.'));
   assert.ok(updates.includes('Command spam removal remains delete-only.'));
   assert.ok(updates.includes('ephemeral reply visible only to the requesting member'));
   assert.ok(roadmap.includes('there are no promised release dates'));
   assert.ok(roadmap.includes('Exploring')); assert.ok(roadmap.includes('future AI option would be an explicit choice'));
+  assert.ok(roadmap.includes('Available now'));
+  assert.ok(roadmap.includes('Private support tickets and community discovery'));
+  assert.doesNotMatch(roadmap, /Richer event planning|Explore more event options/);
+  for (const page of ['updates', 'roadmap', 'developers']) for (const lang of ['en', 'sw']) {
+    assert.ok(renderReleasePage(page, { lang }).includes(`href="/communities${lang === 'sw' ? '?lang=sw' : ''}"`));
+  }
   assert.ok(renderReleasePage('updates', { lang: 'sw' }).includes('22 Oktoba 2026'));
 });

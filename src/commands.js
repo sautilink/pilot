@@ -1,4 +1,5 @@
 import { escapeHtml } from './policy.js';
+import { groupPicker } from './care-service.js';
 import { renderBotPage } from './bot-ui.js';
 import { createFeatureCommands, FEATURE_COMMANDS, ADMIN_FEATURE_COMMANDS } from './feature-commands.js';
 import { createBroadcastCommands } from './broadcast-commands.js';
@@ -479,6 +480,10 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     }
     let language = initialLanguage;
     let view;
+    if(match[1]==='connect') {
+      await quietSend(message.chat.id,language==='en'?'Choose a group you manage. Pilot will check its setup and explain any missing permissions.':'Chagua group unalosimamia. Pilot itakagua setup na kueleza ruhusa zinazohitajika.',{reply_markup:groupPicker(language)});
+      return true;
+    }
     if (match[1] === 'lang') {
       language = match[2];
       await store.setLanguage('user', query.from.id, language, clock());

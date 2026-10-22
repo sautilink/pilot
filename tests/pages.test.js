@@ -296,7 +296,8 @@ test('public visitor navigation hides owner setup and provides honest local demo
   for (const anchor of ['jaribu', 'sheria', 'anza']) assert.ok(h.html.includes(`id="${anchor}"`));
   assert.match(h.html, /href="https:\/\/t\.me\/sautilinkpilotbot"/);
   assert.match(h.html, /Fungua menyu ya Pilot/);
-  assert.match(h.html, /https:\/\/github\.com\/sautilink\/pilot/);
+  assert.ok(h.html.includes('href="/developers?lang=sw"'));
+  assert.doesNotMatch(h.html, /github\.com\/sautilink\/pilot/);
   assert.doesNotMatch(h.html, /href="\/setup|BOT_TOKEN|SETUP_KEY|D1 database|\/api\//);
   assert.match(h.html, /prefers-reduced-motion:reduce/);
   assert.match(h.html, /Haiunganishi Telegram/);
@@ -427,4 +428,30 @@ test('public pages render the shared icon artwork before JavaScript and load mot
   assert.equal(h.elements['sim-run-label'].textContent, 'Show the next offense');
   assert.equal(h.elements['sim-outcome'].dataset.tone, 'blocked');
   assert.equal(h.requests(), 0);
+});
+
+
+test('public community guidance discloses consent, private ticket access and actual retention', () => {
+  for (const lang of ['en', 'sw']) {
+    const home = renderHome({ lang });
+    const privacy = renderPrivacy(lang);
+    for (const page of [home, privacy]) {
+      assert.ok(page.includes(`href="/communities?lang=${lang}"`));
+      assert.doesNotMatch(page, /github\.com|GitHub/);
+    }
+    for (const phrase of lang === 'en' ? [
+      'Support starts off', 'Only the ticket’s member', 'current admins can read or reply',
+      '90 days without new activity', '365 days without new contact',
+      'no message text or Telegram user or group IDs', 'deletion after 7 days',
+      'A public page is not listed automatically', 'Private and unlisted pages cannot be listed',
+      '30 days after the event ends', 'Download a fresh calendar file',
+    ] : [
+      'Support huanza ikiwa imezimwa', 'mhusika na admins wa sasa',
+      'siku 90 bila shughuli mpya', 'siku 365 bila mawasiliano mapya',
+      'hauna maandishi ya ujumbe au Telegram IDs', 'kuondolewa baada ya siku 7',
+      'Ukurasa wa public hauorodheshwi moja kwa moja', 'private au unlisted hauwezi kuorodheshwa',
+      'siku 30 baada ya mwisho wa tukio', 'pakua kalenda mpya',
+    ]) assert.ok(privacy.includes(phrase), phrase);
+    assert.doesNotMatch(privacy, /No directory of connected groups is published|retention periods documented on GitHub|pilot_performance_buckets/);
+  }
 });

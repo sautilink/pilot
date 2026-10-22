@@ -1,8 +1,8 @@
 import { escapeHtml } from './policy.js';
 
-export const EXPERIENCE_VERSION = '2026-10-22.4';
-export const BOT_DESCRIPTION = 'SautiLink Pilot husaidia kusimamia Telegram groups kwa sheria wazi, moderation ya links na forwards, na matangazo yenye sababu. Kagua link, ona matukio yako au tuma rufaa. Admin ana paneli ya faragha ya historia, mipangilio, takwimu na zana za ziada. Chagua Kiswahili au English uanze.';
-export const BOT_SHORT_DESCRIPTION = 'Msaidizi wa group: moderation, kikagua link, rufaa na paneli ya admin. Kiswahili / English.';
+export const EXPERIENCE_VERSION = '2026-10-22.5';
+export const BOT_DESCRIPTION = 'SautiLink Pilot husaidia kusimamia Telegram groups kwa sheria wazi, moderation ya links na forwards, na matangazo yenye sababu. Kagua link, ona matukio yako au tuma rufaa. Shiriki events, chagua vikumbusho na omba msaada wa admins faraghani ikiwa group limeruhusu. Admin ana paneli yake ya mipangilio na zana. Kiswahili / English.';
+export const BOT_SHORT_DESCRIPTION = 'Moderation, events, msaada wa faragha na zana za admins. Kiswahili / English.';
 
 export const PUBLIC_COMMANDS = [
   { command: 'start', description: 'Fungua menyu ya SautiLink Pilot' },
@@ -10,7 +10,9 @@ export const PUBLIC_COMMANDS = [
   { command: 'tools', description: 'Zana za jumuiya, ratiba na mipango' },
   { command: 'flag', description: 'Ripoti ujumbe kwa reply ndani ya group' },
   { command: 'ask', description: 'Tafuta jibu lililoidhinishwa na admins' },
-  { command: 'events', description: 'Ona events za group na ujisajili' },
+  { command: 'events', description: 'Ona events, RSVP na vikumbusho' },
+  { command: 'support', description: 'Omba msaada wa admins wa group faraghani' },
+  { command: 'communities', description: 'Gundua jumuiya zilizochagua kuorodheshwa' },
   { command: 'changelog', description: 'Vipengele vipya na mipango ya Pilot' },
   { command: 'feedback', description: 'Tuma wazo au ripoti tatizo' },
   { command: 'checklink', description: 'Kagua kama link inaruhusiwa' },
@@ -19,8 +21,8 @@ export const PUBLIC_COMMANDS = [
   { command: 'about', description: 'Kuhusu SautiLink Pilot' },
   { command: 'howitworks', description: 'Jinsi moderation inavyofanya kazi' },
   { command: 'rules', description: 'Sheria za links, forwards na spam ya commands' },
-  { command: 'connect', description: 'Ongeza bot kwenye group lako' },
-  { command: 'developer', description: 'Mradi na taarifa za SautiLink' },
+  { command: 'connect', description: 'Chagua group na ukague muunganisho' },
+  { command: 'developer', description: 'Mwongozo wa kuunganisha huduma na API' },
   { command: 'help', description: 'Msaada wa kutumia bot' },
   { command: 'admin', description: 'Fungua paneli ya faragha ya admin' },
   { command: 'language', description: 'Chagua Kiswahili au English' },
@@ -31,7 +33,9 @@ export const GROUP_COMMANDS = [
   { command: 'help', description: 'Pata msaada kwenye mazungumzo ya faragha' },
   { command: 'flag', description: 'Reply kuripoti ujumbe kwa admins', is_ephemeral: true },
   { command: 'ask', description: 'Tafuta kwenye majibu ya group', is_ephemeral: true },
-  { command: 'events', description: 'Events za group na RSVP', is_ephemeral: true },
+  { command: 'events', description: 'Events za group, RSVP na vikumbusho', is_ephemeral: true },
+  { command: 'support', description: 'Fungua msaada wa group faraghani', is_ephemeral: true },
+  { command: 'communities', description: 'Gundua jumuiya zilizo kwenye orodha', is_ephemeral: true },
   { command: 'tools', description: 'Fungua zana za jumuiya', is_ephemeral: true },
   { command: 'checklink', description: 'Kagua link faraghani kabla ya kuituma', is_ephemeral: true },
 ];
@@ -39,6 +43,9 @@ export const GROUP_COMMANDS = [
 // Register only with Telegram's administrator command scope.
 export const ADMIN_COMMANDS = [
   ...GROUP_COMMANDS,
+  { command: 'connect', description: 'Chagua group na ukague muunganisho' },
+  { command: 'doctor', description: 'Kagua ruhusa na utayari wa group', is_ephemeral: true },
+  { command: 'policytest', description: 'Jaribu sheria bila kufuta ujumbe au adhabu', is_ephemeral: true },
   { command: 'admin', description: 'Fungua paneli ya faragha ya admin' },
   { command: 'dashboard', description: 'Fungua paneli ya usimamizi faraghani' },
   { command: 'history', description: 'Ona matukio ya group faraghani', is_ephemeral: true },
@@ -100,23 +107,23 @@ export function renderBotPage(page, context = {}) {
       rows = [[button('🧭 Inavyofanya kazi', 'how'), button('❔ Msaada', 'help')], [homeButton()]];
       break;
     case 'connect':
-      text = '➕ <b>Ongeza Pilot kwenye group lako</b>\n\n<b>1.</b> Bonyeza kitufe hapa chini na uchague group unalosimamia.\n<b>2.</b> Mpe bot nafasi ya admin yenye ruhusa za <b>Delete messages</b> na <b>Ban users</b>.\n<b>3.</b> Tumia <b>supergroup</b> ili ban za saa 24 na siku 7 zifanye kazi.\n<b>4.</b> Ndani ya group, tuma /admin kufungua paneli yako ya faragha.\n\n<b>5.</b> Fungua paneli kuchagua lugha, ujumbe wa karibu, links za ziada na taarifa zako. Ukaguzi wa maombi ya kujiunga unahitaji pia ruhusa ya <b>Invite users</b>.\n\nHali ya group na historia za wanachama huonekana kwa wasimamizi wake waliothibitishwa.';
-      rows = [[{ text: '➕ Chagua group', url: addUrl }], [button('📋 Soma sheria', 'rules'), button('🛡 Paneli ya admin', 'admin')], [homeButton()]];
+      text = '➕ <b>Unganisha Pilot na group lako</b>\n\n<b>1. Chagua group</b>\nTuma /connect hapa faraghani, kisha chagua group unalosimamia. Pilot itakagua ruhusa na kukuonyesha hatua zinazohitajika.\n\n<b>2. Kamilisha ruhusa</b>\nPilot inahitaji kuwa admin yenye <b>Delete messages</b> na <b>Ban users</b>. Tumia <b>supergroup</b> kwa ban za saa 24 na siku 7. Ukaguzi wa maombi ya kujiunga unahitaji pia <b>Invite users</b>.\n\n<b>3. Chagua zana zako</b>\nFungua /admin kwenye group kuchagua lugha, sheria na zana. Support ya faragha na kuorodheshwa kwa jumuiya huanza tu admin akivichagua.\n\nTaarifa za usimamizi zinaonekana baada ya uadmin wako kuthibitishwa.';
+      rows = [[{ text: '➕ Chagua group langu', url: `https://t.me/${username}?start=connect` }], [{ text: 'Ongeza Pilot kwenye group', url: addUrl }], [button('📋 Soma sheria', 'rules'), button('🛡 Paneli ya admin', 'admin')], [homeButton()]];
       break;
     case 'developer':
-      text = '⌘ <b>Mradi wa SautiLink Pilot</b>\n\nPilot ni mradi wa SautiLink kwa usimamizi wa Telegram groups.\n\nTembelea tovuti kwa taarifa za mradi, au GitHub kusoma nyaraka na msimbo wa mradi.\n\nKwa swali linalohusu adhabu au sheria katika group fulani, wasiliana na admin wa group hilo.';
-      rows = [[{ text: '🌐 Tovuti ya Pilot', url: 'https://pilot.sautilink.com' }, { text: '⌘ GitHub na nyaraka', url: 'https://github.com/sautilink/pilot' }], [{ text: 'SautiLink', url: 'https://sautilink.com' }], [homeButton()]];
+      text = '⌘ <b>Unganisha huduma zako na Pilot</b>\n\nAPI ya Pilot husaidia programu yako kusoma majibu yaliyoidhinishwa na matukio ya group, au kuwasilisha rasimu ya tangazo kwa mapitio ya admin.\n\nAdmin wa group huchagua ruhusa na muda wa credential kupitia <b>Zana za jumuiya → Miunganisho</b>. Rasimu haitumwi moja kwa moja.\n\nMwongozo wa huduma una hatua za kuanza, mifano ya maombi na mipaka ya matumizi. Kwa maswali kuhusu moderation, wasiliana na admin wa group husika.';
+      rows = [[{ text: '⌘ Mwongozo wa integrations na API', url: 'https://pilot.sautilink.com/developers?lang=sw' }], [{ text: '🌐 Tovuti ya Pilot', url: 'https://pilot.sautilink.com?lang=sw' }, { text: 'SautiLink Corporation', url: 'https://www.sautilink.com/' }], [homeButton()]];
       break;
     case 'help':
-      text = '❔ <b>Tunaweza kukusaidiaje?</b>\n\n<b>Nataka kuelewa sheria</b>\nFungua /rules au /howitworks.\n\n<b>Nataka kuongeza bot</b>\nFungua /connect kwa hatua fupi za kuanza.\n\n<b>Mimi ni admin</b>\nTuma /admin ndani ya group lako, kisha fungua kiungo cha paneli ya faragha.\n\n<b>Code yangu ya command imefutwa</b>\nUjumbe wenye code ndefu tu unaweza kuondolewa na kichujio cha group. Hatua hii haina ban, mute wala kosa. Kama bot mwingine anahitaji code hiyo, muombe admin aongeze exception.\n\n<b>Nimefungiwa kwenye group</b>\nFungua /mystatus kuona tukio lako. Tuma /appeal kufuata hatua za kuomba ukaguzi. Ban ya muda ikiisha, unaweza kujiunga tena; bot haikurudishi moja kwa moja.\n\n<b>Nataka kukagua link kabla ya kuituma</b>\nTuma /checklink na link hapa faraghani, au tumia kikagua kwenye /dashboard.\n\nRudi /start wakati wowote kufungua menyu.';
-      rows = [[button('📋 Sheria', 'rules'), button('➕ Ongeza bot', 'connect')], [button('🛡 Paneli ya admin', 'admin'), button('⌘ Mradi', 'developer')], [homeButton()]];
+      text = '❔ <b>Tunaweza kukusaidiaje?</b>\n\n<b>Sheria na links</b>\n/rules na /howitworks zinaeleza moderation. Tuma /checklink na link faraghani kabla ya kuipost. Code ndefu za commands zikifutwa, hakuna ban, mute wala kosa; admin anaweza kuweka exception kwa bot inayozihitaji.\n\n<b>Tukio langu au ban</b>\n/mystatus inaonyesha matukio yako; /appeal inafungua njia ya kuomba ukaguzi. Ban ya muda ikiisha, unaweza kujiunga tena ikiwa group linaruhusu.\n\n<b>Msaada wa group</b>\nTuma /support kwenye group husika kufungua ticket faraghani ikiwa admins wamewasha huduma. Ticket inaonekana kwako na kwa admins wa group hilo.\n\n<b>Events na jumuiya</b>\n/events kwenye group hufungua matukio, RSVP na vikumbusho vya hiari. Fungua bot faraghani kwanza ili kuweza kuchagua vikumbusho. /communities inaonyesha jumuiya zilizochagua kuorodheshwa.\n\n<b>Nina group au integration</b>\n/connect inakusaidia kuunganisha group. /admin inafungua paneli baada ya kuthibitisha ruhusa. /developer ina mwongozo wa huduma na API.\n\nRudi /start kufungua menyu.';
+      rows = [[button('📋 Sheria', 'rules'), button('➕ Unganisha group', 'connect')], [button('🛡 Paneli ya admin', 'admin'), button('⌘ Integrations', 'developer')], [homeButton()]];
       break;
     case 'admin':
       if (!context.groupId) {
         text = '🛡 <b>Paneli ya faragha ya admin</b>\n\nFungua group unalosimamia na utume /admin. Bonyeza kiungo utakachopewa kurudi hapa.\n\nPilot itathibitisha kuwa wewe bado ni owner au admin kabla ya kuonyesha taarifa za group hilo.\n\nHujaongeza Pilot kwenye group? Anza hapa chini.';
         rows = [[button('➕ Unganisha group', 'connect')], [homeButton()]];
       } else {
-        text = `🛡 <b>Paneli ya admin</b>\n<b>Group:</b> ${cleanName(context.groupTitle) || 'Group lako'}\n\n<b>Paneli yako ya usimamizi</b>\nHistoria, rufaa, takwimu, links za ziada, ujumbe maalumu na zana za group vinapatikana kwenye paneli.\n\n<b>Unaweza kukagua hapa</b>\n/status — hali ya moderation na matangazo.\n<code>/strikes USER_ID</code> — makosa ya mtumiaji katika group hili.\n\n /history · /appeals · /stats · /settings · /whitelist\n<code>/alerts on</code> — taarifa za matatizo kwako.\n<code>/report daily</code> au <code>/report weekly</code> — ripoti ulizoomba.\n\n<b>Amri hizi hutumwa ndani ya group lenyewe</b>\n/pause na /resume — sitisha au washa moderation.\n<code>/forgive USER_ID</code> — safisha historia ya makosa.\n<code>/unban USER_ID</code> — ondoa ban, hifadhi historia.\n/testnotice — tangazo la majaribio bila adhabu.\n<code>/language sw</code> au <code>/language en</code> — chagua lugha ya group.\n\nKwa amri zinazomhusu mtu, unaweza pia kujibu ujumbe wake ndani ya group. Majibu yenye taarifa za usimamizi yatakuja faraghani.\n\nKubadili group, tuma /admin katika group jingine unalosimamia.`;
+        text = `🛡 <b>Paneli ya admin</b>\n<b>Group:</b> ${cleanName(context.groupTitle) || 'Group lako'}\n\n<b>Paneli yako ya usimamizi</b>\nHistoria, rufaa, takwimu, links za ziada na zana za group vinapatikana kwenye paneli. Zana za jumuiya zina events, vikumbusho, support ya hiari na chaguo la kuorodhesha ukurasa wa public.\n\n<b>Unaweza kukagua hapa</b>\n/status — hali ya moderation na matangazo.\n/doctor — ruhusa na utayari wa group.\n/policytest — jaribu sheria kwa ujumbe wa mfano, bila kufuta ujumbe au kutoa adhabu.\n<code>/strikes USER_ID</code> — makosa ya mtumiaji katika group hili.\n\n /history · /appeals · /stats · /settings · /whitelist\n<code>/alerts on</code> — taarifa za matatizo kwako.\n<code>/report daily</code> au <code>/report weekly</code> — ripoti ulizoomba.\n\n<b>Amri hizi hutumwa ndani ya group lenyewe</b>\n/pause na /resume — sitisha au washa moderation.\n<code>/forgive USER_ID</code> — safisha historia ya makosa.\n<code>/unban USER_ID</code> — ondoa ban, hifadhi historia.\n/testnotice — tangazo la majaribio bila adhabu.\n<code>/language sw</code> au <code>/language en</code> — chagua lugha ya group.\n\nKwa amri zinazomhusu mtu, unaweza pia kujibu ujumbe wake ndani ya group. Majibu yenye taarifa za usimamizi yatakuja faraghani.\n\nKubadili group, tuma /admin katika group jingine unalosimamia.`;
         rows = [[button('↻ Hali ya group', 'status')], [button('❔ Msaada', 'help'), homeButton()]];
       }
       break;
@@ -126,16 +133,20 @@ export function renderBotPage(page, context = {}) {
       rows = [[button('↻ Sasisha hali', 'status'), button('🛡 Paneli ya admin', 'admin')], [homeButton()]];
       break;
     default:
-      text = `✦ <b>Karibu SautiLink Pilot${context.firstName ? `, ${cleanName(context.firstName)}` : ''}!</b>\n\nGroup lenye mpangilio huanza na sheria zilizo wazi. Pilot hukusaidia kuzifuata na kupata msaada unapouhitaji.\n\n🔎 Kagua link kabla ya kuituma.\n📂 Ona matukio yako na tuma rufaa.\n🛡 Simamia groups zako kwenye paneli.\n\nChagua lugha yako au anza na sehemu iliyo hapa chini.\n\n<b>Ungependa kuanzia wapi?</b>`;
-      rows = [[button('ℹ️ Kuhusu Pilot', 'about'), button('🧭 Inavyofanya kazi', 'how')], [button('📋 Sheria', 'rules'), button('➕ Ongeza kwenye group', 'connect')], [button('❔ Msaada', 'help'), button('⌘ Mradi', 'developer')], [button('🛡 Paneli ya admin', 'admin')]];
+      text = `✦ <b>Karibu SautiLink Pilot${context.firstName ? `, ${cleanName(context.firstName)}` : ''}!</b>\n\nGroup lenye mpangilio huanza na sheria zilizo wazi. Pilot hukusaidia kuzifuata na kupata msaada unapouhitaji.\n\n🔎 Kagua link kabla ya kuituma.\n📂 Ona matukio yako na tuma rufaa.\n📅 Shiriki events na chagua vikumbusho.\n💬 Pata msaada wa admins ikiwa group limewasha support.\n🛡 Simamia groups zako kwenye paneli.\n\nChagua lugha yako au anza na sehemu iliyo hapa chini.\n\n<b>Ungependa kuanzia wapi?</b>`;
+      rows = [[button('ℹ️ Kuhusu Pilot', 'about'), button('🧭 Inavyofanya kazi', 'how')], [button('📋 Sheria', 'rules'), button('➕ Ongeza kwenye group', 'connect')], [button('❔ Msaada', 'help'), button('⌘ Integrations', 'developer')], [button('🛡 Paneli ya admin', 'admin')]];
   }
 
   if (['home', 'admin', 'status', 'help', 'connect'].includes(page)) rows.unshift([dashboardButton('sw', { appUrl: context.appUrl, chatId: context.groupId })]);
   if (page === 'home' || page === 'help') rows.splice(1, 0, [button('🔎 Kagua link', 'checklink'), button('📂 Matukio yangu', 'mystatus')]);
   if (page === 'admin' && context.groupId) rows.splice(1, 0, [button('📋 Historia', 'history'), button('📝 Rufaa', 'appeals')], [button('⚙ Mipangilio', 'settings'), button('▥ Takwimu', 'stats')]);
-  if (page === 'home' && context.isOwner === true) rows.push([button('📣 Updates za Pilot', 'bc:panel')]);
+  if (page === 'home' && context.isOwner === true) {
+    text += '\n\n<b>Zana za mmiliki</b>\n/performance — vipimo vya utendaji na tahadhari zako za faragha.';
+    rows.push([button('📣 Updates za Pilot', 'bc:panel'), { text: '⏱ Utendaji', url: `https://t.me/${username}?start=performance` }]);
+  }
   if (['home','admin','help'].includes(page)) rows.push([{text:'✦ Zana za jumuiya',web_app:{url:`https://pilot.sautilink.com/tools?lang=sw${context.groupId?`&chat=${context.groupId}`:''}`}}]);
-  if (page==='developer') rows.splice(0,0,[{text:'⌘ Integrations na API',url:'https://pilot.sautilink.com/developers?lang=sw'}]);
+  if (page === 'home' || page === 'help') rows.push([{ text: '🌐 Gundua jumuiya', url: 'https://pilot.sautilink.com/communities?lang=sw' }]);
+  if (page === 'admin' && context.groupId) rows.splice(1, 0, [{ text: '🩺 Kagua group', url: `https://t.me/${username}?start=doctor_${context.groupId}` }, { text: '✓ Jaribu sheria', url: `https://t.me/${username}?start=policytest_${context.groupId}` }]);
   if (page !== 'language') rows.push([button('🌐 Lugha / Language', 'language')]);
   return { text, reply_markup: { inline_keyboard: rows } };
 }
@@ -148,7 +159,9 @@ export function getPublicCommands(language = 'sw') {
     { command: 'tools', description: 'Community tools, schedules and planning' },
     { command: 'flag', description: 'Report a message by replying in your group' },
     { command: 'ask', description: 'Search answers approved by group admins' },
-    { command: 'events', description: 'View group events and RSVP' },
+    { command: 'events', description: 'View group events, RSVP and reminders' },
+    { command: 'support', description: 'Ask your group admins for help privately' },
+    { command: 'communities', description: 'Explore communities that choose to be listed' },
     { command: 'changelog', description: 'Pilot updates and roadmap' },
     { command: 'feedback', description: 'Share an idea or report a problem' },
     { command: 'checklink', description: 'Check whether a link is allowed' },
@@ -157,8 +170,8 @@ export function getPublicCommands(language = 'sw') {
     { command: 'about', description: 'About SautiLink Pilot' },
     { command: 'howitworks', description: 'How moderation works' },
     { command: 'rules', description: 'Rules for links, forwards and command spam' },
-    { command: 'connect', description: 'Add Pilot to your group' },
-    { command: 'developer', description: 'The SautiLink project and documentation' },
+    { command: 'connect', description: 'Choose a group and check its setup' },
+    { command: 'developer', description: 'Service integration and API guide' },
     { command: 'help', description: 'Get help using Pilot' },
     { command: 'admin', description: 'Open your private admin panel' },
     { command: 'language', description: 'Choose English or Kiswahili' },
@@ -172,7 +185,9 @@ export function getGroupCommands(language = 'sw') {
     { command: 'help', description: 'Get help in a private chat' },
     { command: 'flag', description: 'Reply to report a message to admins', is_ephemeral: true },
     { command: 'ask', description: 'Search your group’s approved answers', is_ephemeral: true },
-    { command: 'events', description: 'View group events and RSVP', is_ephemeral: true },
+    { command: 'events', description: 'Group events, RSVP and reminders', is_ephemeral: true },
+    { command: 'support', description: 'Open private support for this group', is_ephemeral: true },
+    { command: 'communities', description: 'Explore communities that opt into the directory', is_ephemeral: true },
     { command: 'tools', description: 'Open Community tools', is_ephemeral: true },
     { command: 'checklink', description: 'Check a link privately before posting', is_ephemeral: true },
   ];
@@ -182,6 +197,9 @@ export function getAdminCommands(language = 'sw') {
   if (language !== 'en') return ADMIN_COMMANDS;
   return [
     ...getGroupCommands('en'),
+    { command: 'connect', description: 'Choose a group and check its setup' },
+    { command: 'doctor', description: 'Check group permissions and readiness', is_ephemeral: true },
+    { command: 'policytest', description: 'Test rules without deleting messages or penalties', is_ephemeral: true },
     { command: 'admin', description: 'Open your private admin panel' },
     { command: 'dashboard', description: 'Open your moderation panel privately' },
     { command: 'history', description: 'View group incidents privately', is_ephemeral: true },
@@ -204,13 +222,13 @@ export function getAdminCommands(language = 'sw') {
 
 export function getBotDescription(language = 'sw') {
   return language === 'en'
-    ? 'SautiLink Pilot helps moderate Telegram groups with clear rules, link and forward checks, and notices explaining confirmed actions. Check a link, view your cases or submit an appeal. Admins have a private panel for history, settings, statistics and additional tools. Start in English or Kiswahili.'
+    ? 'SautiLink Pilot helps moderate Telegram groups with clear rules, link and forward checks, and notices explaining confirmed actions. Check a link, view your cases or appeal. Join group events, choose reminders and contact admins privately where support is enabled. Admins have a private panel for settings and community tools. English / Kiswahili.'
     : BOT_DESCRIPTION;
 }
 
 export function getBotShortDescription(language = 'sw') {
   return language === 'en'
-    ? 'Your group assistant: moderation, link checks, appeals and an admin panel. English / Kiswahili.'
+    ? 'Moderation, group events, private support and admin tools. English / Kiswahili.'
     : BOT_SHORT_DESCRIPTION;
 }
 
@@ -237,23 +255,23 @@ function renderEnglishPage(page, context) {
       rows = [[button('🧭 How it works', 'how'), button('❔ Help', 'help')], [home()]];
       break;
     case 'connect':
-      text = '➕ <b>Add Pilot to your group</b>\n\n<b>1.</b> Tap the button below and choose a group you manage.\n<b>2.</b> Make the bot an admin with <b>Delete messages</b> and <b>Ban users</b> permissions.\n<b>3.</b> Use a <b>supergroup</b> for 24-hour and 7-day bans.\n<b>4.</b> Send /admin inside the group to open your private panel.\n\n<b>5.</b> Open the panel to choose a language, welcome messages, additional links and your notifications. Join request screening also needs <b>Invite users</b> permission.\n\nGroup status and member histories are available only to its verified admins.';
-      rows = [[{ text: '➕ Choose a group', url: `https://t.me/${username}?startgroup=true&admin=delete_messages+restrict_members` }], [button('📋 Read the rules', 'rules'), button('🛡 Admin panel', 'admin')], [home()]];
+      text = '➕ <b>Connect Pilot to your group</b>\n\n<b>1. Choose a group</b>\nSend /connect here privately, then choose a group you manage. Pilot checks its permissions and shows the next steps.\n\n<b>2. Complete the permissions</b>\nPilot needs to be an admin with <b>Delete messages</b> and <b>Ban users</b>. Use a <b>supergroup</b> for 24-hour and 7-day bans. Join-request review also needs <b>Invite users</b>.\n\n<b>3. Choose your tools</b>\nOpen /admin from your group to choose its language, rules and tools. Private support and directory listing begin only when an admin opts in.\n\nManagement details appear after Pilot verifies your current admin role.';
+      rows = [[{ text: '➕ Choose my group', url: `https://t.me/${username}?start=connect` }], [{ text: 'Add Pilot to a group', url: `https://t.me/${username}?startgroup=true&admin=delete_messages+restrict_members` }], [button('📋 Read the rules', 'rules'), button('🛡 Admin panel', 'admin')], [home()]];
       break;
     case 'developer':
-      text = '⌘ <b>The SautiLink Pilot project</b>\n\nPilot is a SautiLink project for Telegram group moderation.\n\nVisit the website for project information, or GitHub for the documentation and source code.\n\nFor questions about a ban or the rules in a particular group, contact that group’s admin.';
-      rows = [[{ text: '🌐 Pilot website', url: 'https://pilot.sautilink.com' }, { text: '⌘ GitHub and docs', url: 'https://github.com/sautilink/pilot' }], [{ text: 'SautiLink', url: 'https://sautilink.com' }], [home()]];
+      text = '⌘ <b>Connect your services to Pilot</b>\n\nThe Pilot API lets your application read approved answers and group events, or submit an announcement draft for admin review.\n\nA current group admin chooses the permissions and credential expiry in <b>Community tools → Integrations</b>. Drafts are never sent automatically.\n\nThe service guide covers getting started, request examples and usage limits. For moderation questions, contact the relevant group’s admins.';
+      rows = [[{ text: '⌘ Integration and API guide', url: 'https://pilot.sautilink.com/developers' }], [{ text: '🌐 Pilot website', url: 'https://pilot.sautilink.com' }, { text: 'SautiLink Corporation', url: 'https://www.sautilink.com/' }], [home()]];
       break;
     case 'help':
-      text = '❔ <b>How can we help?</b>\n\n<b>I want to understand the rules</b>\nOpen /rules or /howitworks.\n\n<b>I want to add the bot</b>\nOpen /connect for a quick setup guide.\n\n<b>I am a group admin</b>\nSend /admin inside your group, then open the link to your private panel.\n\n<b>My command code was deleted</b>\nA message made up of a long code may be removed by the group’s filter. This adds no ban, mute or strike. If another bot needs that code, ask an admin to add an exception.\n\n<b>I was banned from a group</b>\nOpen /mystatus to see your case. Send /appeal for the steps to request a review. When a temporary ban expires you may rejoin; the bot does not add you back automatically.\n\n<b>I want to check a link before posting</b>\nSend /checklink with the link here privately, or use the checker in /dashboard.\n\nReturn to /start whenever you want to open the menu.';
-      rows = [[button('📋 Rules', 'rules'), button('➕ Add the bot', 'connect')], [button('🛡 Admin panel', 'admin'), button('⌘ Project', 'developer')], [home()]];
+      text = '❔ <b>How can we help?</b>\n\n<b>Rules and links</b>\n/rules and /howitworks explain moderation. Send /checklink with a link privately before posting. Deleted long command codes add no ban, mute or strike; an admin can allow an exception for a bot that needs them.\n\n<b>My case or ban</b>\n/mystatus shows your cases; /appeal explains how to request a review. After a temporary ban expires, you may rejoin if the group allows it.\n\n<b>Help from my group</b>\nSend /support in the relevant group to open a private ticket if its admins enabled support. The ticket is visible to you and that group’s admins.\n\n<b>Events and communities</b>\n/events in your group opens events, RSVPs and optional reminders. Open Pilot privately first so you can opt into reminders. /communities shows communities that chose to be listed.\n\n<b>I manage a group or integration</b>\n/connect helps connect your group. /admin opens the panel after checking your role. /developer has the service and API guide.\n\nReturn to /start to open the menu.';
+      rows = [[button('📋 Rules', 'rules'), button('➕ Connect a group', 'connect')], [button('🛡 Admin panel', 'admin'), button('⌘ Integrations', 'developer')], [home()]];
       break;
     case 'admin':
       if (!context.groupId) {
         text = '🛡 <b>Your private admin panel</b>\n\nOpen a group you manage and send /admin. Tap the link you receive to return here.\n\nPilot checks that you are still the group’s owner or an admin before showing its information.\n\nHaven’t added Pilot to your group yet? Start below.';
         rows = [[button('➕ Connect a group', 'connect')], [home()]];
       } else {
-        text = `🛡 <b>Admin panel</b>\n<b>Group:</b> ${cleanName(context.groupTitle) || 'Your group'}\n\n<b>Your moderation panel</b>\nFind history, appeals, statistics, extra allowed links, custom messages and group tools in the panel.\n\n<b>Check information here</b>\n/status — moderation and announcement status.\n<code>/strikes USER_ID</code> — a member’s strikes in this group.\n\n /history · /appeals · /stats · /settings · /whitelist\n<code>/alerts on</code> — problem alerts for you.\n<code>/report daily</code> or <code>/report weekly</code> — opt-in reports.\n\n<b>Send these commands inside the group itself</b>\n/pause and /resume — pause or resume moderation.\n<code>/forgive USER_ID</code> — clear strike history.\n<code>/unban USER_ID</code> — remove a ban, keep strike history.\n/testnotice — send a sample announcement with no punishment.\n<code>/language sw</code> or <code>/language en</code> — choose the group language.\n\nFor commands about a member, you can also reply to their message inside the group. Detailed admin replies are delivered privately.\n\nTo switch groups, send /admin inside another group you manage.`;
+        text = `🛡 <b>Admin panel</b>\n<b>Group:</b> ${cleanName(context.groupTitle) || 'Your group'}\n\n<b>Your moderation panel</b>\nFind history, appeals, statistics, extra allowed links and group tools in the panel. Community tools include events, reminders, optional private support and the choice to list a public community page.\n\n<b>Check information here</b>\n/status — moderation and announcement status.\n/doctor — group permissions and readiness.\n/policytest — test sample messages without deleting messages or applying penalties.\n<code>/strikes USER_ID</code> — a member’s strikes in this group.\n\n /history · /appeals · /stats · /settings · /whitelist\n<code>/alerts on</code> — problem alerts for you.\n<code>/report daily</code> or <code>/report weekly</code> — opt-in reports.\n\n<b>Send these commands inside the group itself</b>\n/pause and /resume — pause or resume moderation.\n<code>/forgive USER_ID</code> — clear strike history.\n<code>/unban USER_ID</code> — remove a ban, keep strike history.\n/testnotice — send a sample announcement with no punishment.\n<code>/language sw</code> or <code>/language en</code> — choose the group language.\n\nFor commands about a member, you can also reply to their message inside the group. Detailed admin replies are delivered privately.\n\nTo switch groups, send /admin inside another group you manage.`;
         rows = [[button('↻ Group status', 'status')], [button('❔ Help', 'help'), home()]];
       }
       break;
@@ -263,15 +281,19 @@ function renderEnglishPage(page, context) {
       rows = [[button('↻ Refresh status', 'status'), button('🛡 Admin panel', 'admin')], [home()]];
       break;
     default:
-      text = `✦ <b>Welcome to SautiLink Pilot${context.firstName ? `, ${cleanName(context.firstName)}` : ''}!</b>\n\nA well-run group starts with clear rules. Pilot helps you follow them and find support when you need it.\n\n🔎 Check a link before posting.\n📂 View your cases and submit an appeal.\n🛡 Manage your groups in the panel.\n\nChoose your language or start below.\n\n<b>Where would you like to start?</b>`;
-      rows = [[button('ℹ️ About Pilot', 'about'), button('🧭 How it works', 'how')], [button('📋 Rules', 'rules'), button('➕ Add to a group', 'connect')], [button('❔ Help', 'help'), button('⌘ Project', 'developer')], [button('🛡 Admin panel', 'admin')]];
+      text = `✦ <b>Welcome to SautiLink Pilot${context.firstName ? `, ${cleanName(context.firstName)}` : ''}!</b>\n\nA well-run group starts with clear rules. Pilot helps you follow them and find support when you need it.\n\n🔎 Check a link before posting.\n📂 View your cases and submit an appeal.\n📅 Join events and choose reminders.\n💬 Ask your admins for help where support is enabled.\n🛡 Manage your groups in the panel.\n\nChoose your language or start below.\n\n<b>Where would you like to start?</b>`;
+      rows = [[button('ℹ️ About Pilot', 'about'), button('🧭 How it works', 'how')], [button('📋 Rules', 'rules'), button('➕ Add to a group', 'connect')], [button('❔ Help', 'help'), button('⌘ Integrations', 'developer')], [button('🛡 Admin panel', 'admin')]];
   }
   if (['home', 'admin', 'status', 'help', 'connect'].includes(page)) rows.unshift([dashboardButton('en', { appUrl: context.appUrl, chatId: context.groupId })]);
   if (page === 'home' || page === 'help') rows.splice(1, 0, [button('🔎 Check a link', 'checklink'), button('📂 My cases', 'mystatus')]);
   if (page === 'admin' && context.groupId) rows.splice(1, 0, [button('📋 History', 'history'), button('📝 Appeals', 'appeals')], [button('⚙ Settings', 'settings'), button('▥ Statistics', 'stats')]);
-  if (page === 'home' && context.isOwner === true) rows.push([button('📣 Pilot updates', 'bc:panel')]);
+  if (page === 'home' && context.isOwner === true) {
+    text += '\n\n<b>Owner tools</b>\n/performance — service measurements and your private alerts.';
+    rows.push([button('📣 Pilot updates', 'bc:panel'), { text: '⏱ Performance', url: `https://t.me/${username}?start=performance` }]);
+  }
   if (['home','admin','help'].includes(page)) rows.push([{text:'✦ Community tools',web_app:{url:`https://pilot.sautilink.com/tools?lang=en${context.groupId?`&chat=${context.groupId}`:''}`}}]);
-  if (page==='developer') rows.splice(0,0,[{text:'⌘ Integrations and API',url:'https://pilot.sautilink.com/developers'}]);
+  if (page === 'home' || page === 'help') rows.push([{ text: '🌐 Explore communities', url: 'https://pilot.sautilink.com/communities' }]);
+  if (page === 'admin' && context.groupId) rows.splice(1, 0, [{ text: '🩺 Check setup', url: `https://t.me/${username}?start=doctor_${context.groupId}` }, { text: '✓ Test rules', url: `https://t.me/${username}?start=policytest_${context.groupId}` }]);
   if (page !== 'language') rows.push([button('🌐 Language / Lugha', 'language')]);
   return { text, reply_markup: { inline_keyboard: rows } };
 }
