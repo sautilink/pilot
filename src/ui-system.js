@@ -64,10 +64,12 @@ function themeClient() {
       }
     }
   };
-  update();
-  document.addEventListener('DOMContentLoaded', () => {
+  const initializedButtons = new WeakSet();
+  const initialize = () => {
     update(); carry();
     for (const button of document.querySelectorAll('[data-theme-toggle]')) {
+      if (initializedButtons.has(button)) continue;
+      initializedButtons.add(button);
       button.addEventListener('click', () => {
         selected = root.dataset.theme === 'dark' ? 'light' : 'dark';
         const next = new URL(location.href); next.searchParams.set('theme', selected);
@@ -75,6 +77,11 @@ function themeClient() {
         update(); carry();
       });
     }
-  });
+  };
+  update();
+  // Apply colors in the head, then bind controls as soon as they exist. This
+  // also works if a page loader executes this script after DOMContentLoaded.
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initialize, { once: true });
+  else initialize();
   media?.addEventListener?.('change', () => { if (!selected) update(); });
 }

@@ -5,17 +5,21 @@ import { themeHead, themeButton } from '../src/ui-system.js';
 import { renderHome, renderPrivacy, renderSetup } from '../src/pages.js';
 import { renderDashboard } from '../src/dashboard.js';
 
-function themeHarness({ href = 'https://pilot.sautilink.com/?lang=en', dark = false, telegramTheme } = {}) {
+function themeHarness({ href = 'https://pilot.sautilink.com/?lang=en', dark = false, telegramTheme, readyState = 'loading', fireReady = true } = {}) {
   const listeners = {}, mediaListeners = {}, writes = [], platformColors = [];
   const location = new URL(href);
-  const node = attributes => ({ attributes: { ...attributes }, listeners: {},
+  const node = attributes => ({ attributes: { ...attributes }, listeners: {}, registered: {},
     getAttribute(key) { return this.attributes[key]; },
     setAttribute(key, value) { this.attributes[key] = value; },
-    addEventListener(event, callback) { this.listeners[event] = callback; },
+    addEventListener(event, callback) {
+      (this.registered[event] ||= []).push(callback);
+      this.listeners[event] = (...args) => { for (const listener of this.registered[event]) listener(...args); };
+    },
   });
   const button = node({}), meta = node({});
   const links = ['/privacy?lang=en', '#jaribu', '/?lang=sw', 'https://t.me/sautilinkpilotbot?start=dashboard', '//other.example/path'].map(href => node({ href }));
   const document = {
+    readyState,
     documentElement: { dataset: {} },
     querySelector: () => meta,
     querySelectorAll: selector => selector === '[data-theme-toggle]' ? [button] : links,
@@ -29,9 +33,40 @@ function themeHarness({ href = 'https://pilot.sautilink.com/?lang=en', dark = fa
     matchMedia: () => media,
     history: { replaceState(state, title, path) { writes.push(path); location.href = new URL(path, location).href; } },
   });
-  listeners.DOMContentLoaded();
-  return { document, button, meta, links, writes, platformColors, media, mediaListeners };
+  const initialize = () => { document.readyState = 'interactive'; listeners.DOMContentLoaded?.(); };
+  if (fireReady) initialize();
+  return { document, button, meta, links, writes, platformColors, media, mediaListeners, initialize, listeners };
 }
+
+test('theme paints during loading and binds each control only once when the document becomes ready', () => {
+  const h = themeHarness({ fireReady: false });
+  assert.equal(h.document.documentElement.dataset.theme, 'light');
+  assert.equal(h.button.listeners.click, undefined);
+  h.initialize();
+  h.initialize();
+  assert.equal(h.button.registered.click.length, 1);
+  h.button.listeners.click();
+  assert.equal(h.document.documentElement.dataset.theme, 'dark');
+  h.button.listeners.click();
+  assert.equal(h.document.documentElement.dataset.theme, 'light');
+  assert.equal(h.writes.length, 2);
+});
+
+test('theme controls work immediately when their script runs after DOMContentLoaded', () => {
+  for (const readyState of ['interactive', 'complete']) {
+    const h = themeHarness({ readyState, fireReady: false });
+    assert.equal(h.listeners.DOMContentLoaded, undefined);
+    assert.equal(h.button.registered.click.length, 1);
+    h.button.listeners.click();
+    assert.equal(h.document.documentElement.dataset.theme, 'dark');
+    assert.equal(h.button.attributes['aria-pressed'], 'true');
+    assert.match(h.writes[0], /theme=dark/);
+    h.button.listeners.click();
+    assert.equal(h.document.documentElement.dataset.theme, 'light');
+    assert.equal(h.button.attributes['aria-pressed'], 'false');
+    assert.match(h.writes[1], /theme=light/);
+  }
+});
 
 test('theme follows Telegram or system preference and an explicit choice survives system changes', () => {
   const system = themeHarness({ dark: true });

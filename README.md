@@ -17,6 +17,25 @@ Moderation notices end with “SautiLink Pilot · from SautiLink Corporation”.
 
 Appearance follows Telegram or the device preference unless the visitor chooses light or dark. An explicit choice travels in a `theme` URL parameter; Pilot does not store it in browser storage or copy Telegram launch credentials into navigation links. The public site remains informational, while group data and administrative actions require the verified Telegram identity described below.
 
+## Search discovery and indexing
+
+The server renders the public homepage and privacy page with English and Swahili metadata. Each language has a clean canonical URL and reciprocal `hreflang` links; theme, tracking, and Telegram launch parameters do not enter search metadata. `/robots.txt` advertises `/sitemap.xml`, which lists only those four canonical public URLs. Dates are omitted until there is a reliable content modification date; every request or code deployment is not presented as a content update.
+
+The setup and dashboard shells remain crawlable so engines can read their `noindex` directives. Private APIs, webhook responses, health responses, and error responses also carry `X-Robots-Tag: noindex, nofollow`. Existing authentication continues to protect all group and operator data. Public icon assets remain crawlable for rendering.
+
+After a public content change has reached production, the explicit IndexNow helper can notify participating search engines in one batch:
+
+```sh
+node scripts/notify-indexnow.mjs --dry-run
+node scripts/notify-indexnow.mjs --submit
+```
+
+The helper checks the deployed public proof file, response statuses, canonical URLs, and indexing directives before submitting. It uses no Telegram or Cloudflare credentials, runs no background schedule, and does not retry automatically. The random IndexNow key is a public proof-of-hosting value; it grants no access to Pilot. HTTP 200 means the notification was received; HTTP 202 means key verification is still pending. Neither response guarantees crawling, indexing, ranking, or inclusion in every search engine.
+
+For Google, verify the domain or URL-prefix property in [Search Console](https://search.google.com/search-console), submit `https://pilot.sautilink.com/sitemap.xml`, and inspect the canonical homepage URL. Submit the same sitemap in [Bing Webmaster Tools](https://www.bing.com/webmasters). Account verification must use the real token or DNS record provided by that service. Keep Cloudflare firewall, challenge, and crawler policies compatible with the public search crawlers you want to reach; application-level robots instructions cannot override an edge block.
+
+Reference: [Google sitemap guidance](https://developers.google.com/search/docs/crawling-indexing/sitemaps/build-sitemap), [Google noindex guidance](https://developers.google.com/search/docs/crawling-indexing/block-indexing), and the [IndexNow protocol](https://www.indexnow.org/documentation).
+
 ## Response path and performance
 
 Each authenticated webhook reads readiness and experience metadata in one fresh D1 snapshot. Commands reuse the moderator's durable replay check; direct command handlers still check replays themselves. Recognized ordinary menu buttons start an empty Telegram acknowledgement before waiting for the group coordinator, while authorization and any requested action still run inside the normal checked path. Owner announcements and join challenges retain their separate callback handling.

@@ -9,24 +9,26 @@ import {createGuardrailStore} from './guardrail-store.js';
 import {operationalHealth} from './monitoring.js';
 import {createOwnerAuth} from './owner-auth.js';
 import {iconAssetResponse} from './public-icons.js';
+import {seoDiscoveryResponse} from './seo-discovery.js';
 
 const SECURITY_HEADERS={
   'X-Content-Type-Options':'nosniff',
   'Referrer-Policy':'no-referrer',
   'X-Frame-Options':'DENY',
   'Permissions-Policy':'camera=(), microphone=(), geolocation=()',
+  'X-Robots-Tag':'noindex, nofollow',
   'Content-Security-Policy':"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https://sautilink.com data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   'Cache-Control':'no-store'
 };
-function response(body,status=200,type='application/json; charset=utf-8') {
-  return new Response(type.startsWith('application/json') ? JSON.stringify(body) : body,{status,headers:{...SECURITY_HEADERS,'Content-Type':type}});
+function response(body,status=200,type='application/json; charset=utf-8',extraHeaders={}) {
+  return new Response(type.startsWith('application/json') ? JSON.stringify(body) : body,{status,headers:{...SECURITY_HEADERS,'Content-Type':type,...extraHeaders}});
 }
-const html=body=>response(body,200,'text/html; charset=utf-8');
-const appHtml=body=>{
+const html=(body,{head=false,indexable=true}={})=>response(head ? null : body,200,'text/html; charset=utf-8',{'X-Robots-Tag':indexable ? 'index, follow' : 'noindex, nofollow'});
+const appHtml=(body,{head=false}={})=>{
   const headers={...SECURITY_HEADERS,'Content-Type':'text/html; charset=utf-8'};
   delete headers['X-Frame-Options'];
   headers['Content-Security-Policy']="default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://sautilink.com; connect-src 'self'; frame-ancestors https://web.telegram.org https://*.telegram.org; base-uri 'none'; form-action 'self'";
-  return new Response(body,{headers});
+  return new Response(head ? null : body,{headers});
 };
 const error=(message,status)=>response({ok:false,message},status);
 const validToken=value=>/^\d+:[A-Za-z0-9_-]{20,}$/.test(value || '');
@@ -130,15 +132,23 @@ async function pairOwner(request,env,lang) {
 export async function handleFetch(request,env,ctx) {
   let lang='en';
   try {
+    const discovery=seoDiscoveryResponse(request);
+    if(discovery) return discovery;
     const iconAsset=iconAssetResponse(request);
     if(iconAsset) return iconAsset;
     const url=new URL(request.url),path=url.pathname;
+    const readPage=request.method==='GET' || request.method==='HEAD';
+    const head=request.method==='HEAD';
     lang=url.searchParams.get('lang')==='sw' ? 'sw' : 'en';
-    if(request.method==='GET' && path==='/') return html(renderHome({...await publicState(env),lang}));
-    if(request.method==='GET' && path==='/privacy') return html(renderPrivacy(lang));
-    if(request.method==='GET' && path==='/app') return appHtml(renderDashboard({lang}));
-    if(path==='/api/pilot') return await handleDashboardApi(request,env);
-    if(request.method==='GET' && path==='/setup') return html(renderSetup(lang));
+    if(readPage && path==='/') return html(renderHome({...await publicState(env),lang}),{head});
+    if(readPage && path==='/privacy') return html(renderPrivacy(lang),{head});
+    if(readPage && path==='/app') return appHtml(renderDashboard({lang}),{head});
+    if(path==='/api/pilot') {
+      const result=await handleDashboardApi(request,env);
+      result.headers.set('X-Robots-Tag','noindex, nofollow');
+      return result;
+    }
+    if(readPage && path==='/setup') return html(renderSetup(lang),{head,indexable:false});
     if(request.method==='GET' && path==='/health') {
       const {ready}=await publicState(env); return response({ok:ready,service:'SautiLink Pilot'},ready ? 200 : 503);
     }

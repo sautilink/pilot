@@ -3,6 +3,7 @@
   "name": "sautilink-pilot",
   "main": "src/index.js",
   "compatibility_date": "2026-10-21",
+  "keep_names": false,
   "keep_vars": true,
   "workers_dev": true,
   "routes": [{ "pattern": "pilot.sautilink.com", "custom_domain": true }],
