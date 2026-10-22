@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { TestD1 } from './helpers/d1.js';
 import { applySchema, createStore } from '../src/store.js';
 import { createBotExperience } from '../src/commands.js';
-import { dashboardButton, getPublicCommands, getGroupCommands, getAdminCommands } from '../src/bot-ui.js';
+import { dashboardButton, getPublicCommands, getGroupCommands, getAdminCommands, renderBotPage } from '../src/bot-ui.js';
+import { publicGroupRules } from '../src/templates.js';
 
 const GROUP = -1001001, OTHER = -1001002, ADMIN = 102, USER = 101, BOT = 900, NOW = 1792670400;
 const bot = { id: BOT, is_bot: true, username: 'sautilinkpilotbot' };
@@ -140,6 +141,46 @@ test('every selected-group view calls fresh service authorization and revoked ad
   assert.equal(await f.store.adminContext(ADMIN), null);
   assert.doesNotMatch(f.replies().at(-1).params.text, /Private|case-1|token/);
   assert.equal(f.writes.length, 0);
+});
+
+test('private settings show default-on command deletion and preserve the selected group’s off choice', async t => {
+  const f = await fixture(t);
+  await f.store.setAdminContext(ADMIN, GROUP, NOW);
+  await f.command(privateMessage('/settings', ADMIN));
+  assert.match(f.replies().at(-1).params.text, /Command spam · delete only: enabled/);
+  assert.match(f.replies().at(-1).params.text, /no ban, mute or strike/);
+  f.state.overview.settings.command_spam_enabled = false;
+  await f.command(privateMessage('/settings', ADMIN));
+  assert.match(f.replies().at(-1).params.text, /Command spam · delete only: disabled/);
+  await f.store.setLanguage('user', ADMIN, 'sw', NOW);
+  await f.command(privateMessage('/settings', ADMIN));
+  assert.match(f.replies().at(-1).params.text, /Spam ya commands · futa tu: imezimwa/);
+  assert.match(f.replies().at(-1).params.text, /hakuna ban, mute wala kosa/);
+  assert.equal(f.writes.length, 0);
+});
+
+test('public guides distinguish silent command-code deletion from link and forward bans in both languages', () => {
+  for (const language of ['sw', 'en']) {
+    for (const page of ['how', 'rules', 'help']) {
+      const text = renderBotPage(page, { language }).text;
+      assert.match(text, language === 'en' ? /(?:no|never add a) ban, mute or strike/i : /hakuna ban, mute wala kosa|haina ban, mute wala kosa/i);
+      assert.match(text, language === 'en' ? /command|code/ : /command|code/);
+      assert.doesNotMatch(text, /SETUP_KEY|BOT_TOKEN|claimowner|command_spam_allowlist/);
+    }
+  }
+});
+
+test('welcome and join rules include command deletion only while the group filter is enabled', () => {
+  for (const language of ['sw', 'en']) {
+    const defaults = publicGroupRules({}, language);
+    const enabled = publicGroupRules({ command_spam_enabled: true }, language);
+    const disabled = publicGroupRules({ command_spam_enabled: false, [`rules_${language}`]: 'Custom note.' }, language);
+    assert.equal(defaults, enabled);
+    assert.match(enabled, language === 'en' ? /silently deleted.*does not add a ban, mute or strike/ : /kimya kimya.*Hakuna ban, mute wala kosa/);
+    assert.doesNotMatch(disabled, /command/);
+    assert.match(disabled, /24.*7/);
+    assert.match(disabled, /Custom note\./);
+  }
 });
 
 test('notification choices preserve the other preference and use only the selected group queue', async t => {

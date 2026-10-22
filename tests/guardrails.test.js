@@ -178,3 +178,258 @@ test('a recovered welcome delivery resolves its issue alert',async t=>{
   f.hooks.delete('sendMessage');f.advance(61);await f.guards.welcome(GROUP,{id:USER,first_name:'User'},f.clock(),await f.controlStore.settings(GROUP));
   health=await f.db.prepare('SELECT * FROM pilot_health_events WHERE kind=?').bind('welcome_delivery_failed').first();assert.equal(health.resolved_at,f.clock());
 });
+
+const LONG_COMMAND='/zTwNCWkqQtZ2UaBbYTVvyPRKI1KawCiwB6yVwDkEXYT14Y0HmKu6YI0qT';
+
+test('long slash codes are silently deleted by default without strikes, notices or restrictions',async t=>{
+  const f=await fixture(t);
+  for(let i=0;i<12;i++) assert.equal((await f.moderator.handle(f.message({text:LONG_COMMAND,from:{id:USER+i+10}}))).status,'command_spam');
+  assert.equal(f.of('deleteMessage').length,12);
+  assert.equal(f.of('banChatMember').length,0);assert.equal(f.of('restrictChatMember').length,0);assert.equal(f.of('sendMessage').length,0);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) AS n FROM members').first()).n,0);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) AS n FROM incidents').first()).n,0);
+  const audit=(await f.db.prepare("SELECT * FROM pilot_audit WHERE action='command_spam_deleted'").all()).results;
+  assert.equal(audit.length,12);
+  assert.ok(audit.every(row=>!row.details_json.includes(LONG_COMMAND) && JSON.parse(row.details_json).action==='deleted'));
+});
+
+test('repeated long codes never contribute to flood counts or activate a configured flood mute',async t=>{
+  const f=await fixture(t,{flood_enabled:true,flood_limit:3,flood_window:10,flood_action:'mute'});
+  for(let i=0;i<3;i++) await f.moderator.handle(f.message());
+  for(let i=0;i<12;i++) await f.moderator.handle(f.message({text:LONG_COMMAND}));
+  assert.equal(f.of('deleteMessage').length,12);
+  assert.equal(f.of('restrictChatMember').length,0);assert.equal(f.of('banChatMember').length,0);assert.equal(f.of('sendMessage').length,0);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) AS n FROM pilot_flood_events WHERE user_id=?').bind(String(USER)).first()).n,3);
+});
+
+test('long-code settings and command exceptions apply only to their chosen group',async t=>{
+  const f=await fixture(t,{command_spam_allowlist:LONG_COMMAND});
+  await f.moderator.handle(f.message({text:LONG_COMMAND}));
+  assert.equal(f.of('deleteMessage').length,0);
+  await f.moderator.handle(f.message({text:LONG_COMMAND,chat:{id:OTHER,type:'supergroup'}}));
+  assert.equal(f.of('deleteMessage').length,1);
+  await f.configure({command_spam_enabled:false});
+  await f.moderator.handle(f.message({text:LONG_COMMAND}));
+  assert.equal(f.of('deleteMessage').length,1);
+  await f.configure({command_spam_allowlist:'/get_*@musicbot'});
+  await f.moderator.handle(f.message({text:'/get_'+LONG_COMMAND.slice(1)+'@MusicBot'}));
+  assert.equal(f.of('deleteMessage').length,1);
+  await f.moderator.handle(f.message({text:LONG_COMMAND+'@MusicBot'}));
+  assert.equal(f.of('deleteMessage').length,2);
+});
+
+test('ordinary bot commands and arguments survive the long-code guard',async t=>{
+  const f=await fixture(t);
+  for(const text of ['/start','/help@sautilinkpilotbot','/play@MusicBot wimbo',`/play ${LONG_COMMAND}`,`/get ${LONG_COMMAND.slice(1)}`,'@juma','#habari']) await f.moderator.handle(f.message({text}));
+  assert.equal(f.of('deleteMessage').length,0);assert.equal(f.of('banChatMember').length,0);assert.equal(f.of('restrictChatMember').length,0);
+});
+
+test('long-code guard respects admins, anonymous admins, linked channels and actual bot senders',async t=>{
+  const f=await fixture(t,{flood_enabled:true,flood_limit:3,flood_window:10,flood_action:'mute'});
+  for(const status of ['administrator','creator']) {
+    f.roles.set(`${GROUP}:${USER}`,{status});
+    await f.moderator.handle(f.message({text:LONG_COMMAND}));
+  }
+  for(const sender of [GROUP,-100900]) await f.moderator.handle(f.message({text:LONG_COMMAND,sender_chat:{id:sender},from:{id:136817688,is_bot:true}}));
+  for(const id of [BOT,901]) await f.moderator.handle(f.message({text:LONG_COMMAND,from:{id,is_bot:true}}));
+  assert.equal(f.of('deleteMessage').length,0);assert.equal(f.of('banChatMember').length,0);assert.equal(f.of('restrictChatMember').length,0);
+});
+
+test('a member promoted during long-code checks is protected by a fresh role check',async t=>{
+  const f=await fixture(t);let reads=0;
+  f.hooks.set('getChatMember',p=>p.user_id===BOT?{status:'administrator',can_delete_messages:true}:++reads===1?{status:'member'}:{status:'administrator'});
+  assert.equal((await f.moderator.handle(f.message({text:LONG_COMMAND}))).status,'admin');
+  assert.equal(f.of('deleteMessage').length,0);
+});
+
+test('newly linked channel is exempt but unrelated channel codes are deleted without fake-user restrictions',async t=>{
+  const f=await fixture(t);let reads=0;
+  f.hooks.set('getChat',()=>({id:GROUP,type:'supergroup',linked_chat_id:++reads===1?-100900:-100999}));
+  await f.moderator.handle(f.message({text:LONG_COMMAND,sender_chat:{id:-100999},from:{id:136817688,is_bot:true}}));
+  assert.equal(f.of('deleteMessage').length,0);
+  f.hooks.delete('getChat');
+  await f.moderator.handle(f.message({text:LONG_COMMAND,sender_chat:{id:-100999},from:{id:136817688,is_bot:true}}));
+  assert.equal(f.of('deleteMessage').length,1);assert.equal(f.of('banChatMember').length,0);assert.equal(f.of('restrictChatMember').length,0);
+});
+
+test('edited text and captions are checked using full tokens without rerunning a command',async t=>{
+  const f=await fixture(t);
+  const clean=f.message();await f.moderator.handle(clean);f.advance(1);
+  await f.moderator.handle(f.message({...clean.message,text:LONG_COMMAND,edit_date:f.clock(),entities:[{type:'bot_command',offset:0,length:33}]},true));
+  await f.moderator.handle(f.message({text:undefined,caption:LONG_COMMAND,edit_date:f.clock(),caption_entities:[{type:'bot_command',offset:0,length:33}]},true));
+  assert.equal(f.of('deleteMessage').length,2);assert.equal(f.of('banChatMember').length,0);assert.equal(f.of('sendMessage').length,0);
+});
+
+test('formatted long-code examples are preserved but formatting only the slash does not hide a code',async t=>{
+  const f=await fixture(t);
+  for(const type of ['code','pre']) await f.moderator.handle(f.message({text:LONG_COMMAND,entities:[{type,offset:0,length:LONG_COMMAND.length}]}));
+  assert.equal(f.of('deleteMessage').length,0);
+  await f.moderator.handle(f.message({text:LONG_COMMAND,entities:[{type:'code',offset:0,length:1}]}));
+  assert.equal(f.of('deleteMessage').length,1);
+});
+
+test('paused, pre-activation, stale and human-overridden codes are not removed',async t=>{
+  const f=await fixture(t);
+  await f.store.run('UPDATE groups SET enabled=0 WHERE chat_id=?',String(GROUP));
+  await f.moderator.handle(f.message({text:LONG_COMMAND}));
+  await f.store.run('UPDATE groups SET enabled=1,activated_at=? WHERE chat_id=?',START,String(GROUP));
+  await f.moderator.handle(f.message({text:LONG_COMMAND,date:START-1}));
+  await f.moderator.handle(f.message({text:LONG_COMMAND,date:START-48*3600,edit_date:START},true));
+  await f.store.override(GROUP,USER,START);
+  await f.moderator.handle(f.message({text:LONG_COMMAND}));
+  assert.equal(f.of('deleteMessage').length,0);assert.equal(f.of('restrictChatMember').length,0);
+  f.advance(1);await f.moderator.handle(f.message({text:LONG_COMMAND}));assert.equal(f.of('deleteMessage').length,1);
+});
+
+test('long-code deletion requires only delete permission and also works in basic groups',async t=>{
+  const f=await fixture(t);
+  f.roles.set(`${GROUP}:${BOT}`,{status:'administrator',can_delete_messages:true,can_restrict_members:false});
+  await f.moderator.handle(f.message({text:LONG_COMMAND,chat:{id:GROUP,type:'group'}}));
+  assert.equal(f.of('deleteMessage').length,1);assert.equal(f.of('restrictChatMember').length,0);assert.equal(f.of('banChatMember').length,0);
+  f.roles.set(`${GROUP}:${BOT}`,{status:'administrator',can_delete_messages:false,can_restrict_members:true});
+  assert.equal((await f.moderator.handle(f.message({text:LONG_COMMAND}))).status,'command_spam_missing_permission');
+  assert.equal(f.of('deleteMessage').length,1);assert.equal(f.of('sendMessage').length,0);
+});
+
+test('confirmed long-code deletion is idempotent across updates and does not persist message content',async t=>{
+  const f=await fixture(t),update=f.message({text:LONG_COMMAND});
+  await f.moderator.handle(update);await f.moderator.handle(update);
+  await f.moderator.handle({...update,update_id:1000});
+  assert.equal(f.of('deleteMessage').length,1);
+  const rows=(await f.db.prepare('SELECT * FROM pilot_guard_actions').all()).results;
+  assert.equal(rows.length,1);assert.equal(rows[0].status,'deleted');assert.ok(!JSON.stringify(rows).includes(LONG_COMMAND));
+});
+
+test('failed and unknown code deletions are reported honestly without restriction or automatic replay',async t=>{
+  const f=await fixture(t,{flood_enabled:true,flood_limit:3,flood_window:10,flood_action:'mute'});
+  for(const [result,status] of [[()=>{throw new TelegramError('Forbidden',403,false);},'failed'],[()=>{throw new TelegramError('Response lost',0,true);},'unknown'],[()=>false,'unknown']]) {
+    f.hooks.set('deleteMessage',result);
+    const update=f.message({text:LONG_COMMAND});
+    assert.equal((await f.moderator.handle(update)).status,'command_spam_review');
+    await f.moderator.handle({...update,update_id:update.update_id+10000});
+    const row=await f.db.prepare('SELECT status FROM pilot_guard_actions WHERE id=?').bind(`commandspam:${GROUP}:${update.message.message_id}`).first();
+    assert.equal(row.status,status);
+  }
+  assert.equal(f.of('deleteMessage').length,3);assert.equal(f.of('restrictChatMember').length,0);assert.equal(f.of('banChatMember').length,0);assert.equal(f.of('sendMessage').length,0);
+  assert.equal((await f.db.prepare("SELECT COUNT(*) AS n FROM pilot_audit WHERE action='command_spam_deleted'").first()).n,0);
+  assert.equal((await f.db.prepare("SELECT COUNT(*) AS n FROM pilot_audit WHERE action='command_spam_review'").first()).n,3);
+});
+
+test('already-removed code messages are treated as deleted without another action',async t=>{
+  const f=await fixture(t);f.hooks.set('deleteMessage',()=>{throw new TelegramError('Bad Request: message to delete not found',400,false);});
+  assert.equal((await f.moderator.handle(f.message({text:LONG_COMMAND}))).status,'command_spam');
+  assert.equal((await f.db.prepare("SELECT status FROM pilot_guard_actions WHERE kind='command_spam'").first()).status,'deleted');
+});
+
+test('definite 429 code deletions wait for retry_after and retry at most three times',async t=>{
+  const f=await fixture(t,{flood_enabled:true,flood_limit:3,flood_window:10,flood_action:'mute'});
+  f.hooks.set('deleteMessage',()=>{throw new TelegramError('Too Many Requests',429,false,10);});
+  const update=f.message({text:LONG_COMMAND});
+  for(let attempt=1;attempt<=3;attempt++) {
+    const result=await f.moderator.handle(update);
+    assert.equal(f.of('deleteMessage').length,attempt);
+    if(attempt<3) {
+      assert.deepEqual(result,{status:'command_spam_retry',retry:true});
+      assert.equal(await f.store.seen(update.update_id),null);
+      const reads=f.of('getChatMember').length;
+      f.advance(9);assert.deepEqual(await f.moderator.handle(update),{status:'command_spam_retry',retry:true});
+      assert.equal(f.of('getChatMember').length,reads,'not-before retries avoid further Telegram reads');
+      assert.equal(f.of('deleteMessage').length,attempt);f.advance(1);
+    } else {
+      assert.equal(result.status,'command_spam_review');assert.ok(await f.store.seen(update.update_id));
+    }
+  }
+  f.advance(10);await f.moderator.handle({...update,update_id:9999});assert.equal(f.of('deleteMessage').length,3);
+  assert.equal(f.of('restrictChatMember').length,0);assert.equal(f.of('banChatMember').length,0);assert.equal(f.of('sendMessage').length,0);
+});
+
+test('429 retry can complete but a new admin promotion cancels deletion before retry',async t=>{
+  const f=await fixture(t);let attempts=0;
+  f.hooks.set('deleteMessage',()=>{if(++attempts===1)throw new TelegramError('Too Many Requests',429,false,2);return true;});
+  const first=f.message({text:LONG_COMMAND});await f.moderator.handle(first);f.advance(2);
+  assert.equal((await f.moderator.handle(first)).status,'command_spam');
+  assert.equal(f.of('deleteMessage').length,2);
+  f.hooks.set('deleteMessage',()=>{throw new TelegramError('Too Many Requests',429,false,2);});
+  const second=f.message({text:LONG_COMMAND});await f.moderator.handle(second);f.advance(2);
+  f.roles.set(`${GROUP}:${USER}`,{status:'administrator'});
+  assert.equal((await f.moderator.handle(second)).status,'admin');assert.equal(f.of('deleteMessage').length,3);
+});
+
+test('a newer clean edit cancels an old 429 payload while a later new spam edit remains removable',async t=>{
+  const f=await fixture(t);f.hooks.set('deleteMessage',()=>{throw new TelegramError('Too Many Requests',429,false,10);});
+  const original=f.message({text:LONG_COMMAND});
+  assert.equal((await f.moderator.handle(original)).status,'command_spam_retry');
+  f.advance(1);
+  await f.moderator.handle(f.message({...original.message,edit_date:f.clock(),text:'Good morning everyone'},true));
+  f.advance(10);f.hooks.delete('deleteMessage');
+  assert.equal((await f.moderator.handle(original)).status,'command_spam_duplicate');
+  assert.equal(f.of('deleteMessage').length,1,'old webhook never deletes the new clean message');
+  await f.moderator.handle(f.message({...original.message,edit_date:f.clock(),text:LONG_COMMAND},true));
+  assert.equal(f.of('deleteMessage').length,2,'strictly newer spam edit is still moderated');
+});
+
+test('same-second clean edit fails safe against a pending old long-code deletion',async t=>{
+  const f=await fixture(t);f.hooks.set('deleteMessage',()=>{throw new TelegramError('Too Many Requests',429,false,2);});
+  const original=f.message({text:LONG_COMMAND});await f.moderator.handle(original);
+  await f.moderator.handle(f.message({...original.message,edit_date:f.clock(),text:'Clean now'},true));
+  f.advance(2);f.hooks.delete('deleteMessage');await f.moderator.handle(original);
+  assert.equal(f.of('deleteMessage').length,1);
+});
+
+test('newer long-code edit retains retry backoff and invalidates the older candidate payload',async t=>{
+  const f=await fixture(t);f.hooks.set('deleteMessage',()=>{throw new TelegramError('Too Many Requests',429,false,10);});
+  const original=f.message({text:LONG_COMMAND});await f.moderator.handle(original);f.advance(1);
+  const edited=f.message({...original.message,edit_date:f.clock(),text:`/${'B'.repeat(40)}`},true);
+  assert.equal((await f.moderator.handle(edited)).status,'command_spam_retry');assert.equal(f.of('deleteMessage').length,1);
+  f.advance(10);f.hooks.delete('deleteMessage');
+  assert.equal((await f.moderator.handle(original)).status,'command_spam_duplicate');assert.equal(f.of('deleteMessage').length,1);
+  assert.equal((await f.moderator.handle(edited)).status,'command_spam');assert.equal(f.of('deleteMessage').length,2);
+});
+
+test('clean edits invalidate pending tags while cleanup is disabled and disabled tag retries stop',async t=>{
+  const f=await fixture(t,{flood_enabled:true,flood_limit:3,flood_window:10,flood_action:'mute'});
+  f.hooks.set('deleteMessage',()=>{throw new TelegramError('Too Many Requests',429,false,10);});
+  const original=f.message({text:LONG_COMMAND});await f.moderator.handle(original);f.advance(1);
+  await f.configure({command_spam_enabled:false,flood_enabled:true,flood_limit:3,flood_window:10,flood_action:'mute'});
+  await f.moderator.handle(f.message({...original.message,edit_date:f.clock(),text:'This is clean now'},true));
+  for(let i=0;i<5;i++) assert.equal((await f.moderator.handle(f.message({text:LONG_COMMAND}))).status,'command_spam_disabled');
+  f.advance(10);await f.configure({command_spam_enabled:true});f.hooks.delete('deleteMessage');
+  assert.equal((await f.moderator.handle(original)).status,'command_spam_duplicate');assert.equal(f.of('deleteMessage').length,1);
+  assert.equal(f.of('restrictChatMember').length,0);
+  const next=f.message({text:LONG_COMMAND});f.hooks.set('deleteMessage',()=>{throw new TelegramError('Too Many Requests',429,false,2);});await f.moderator.handle(next);
+  await f.configure({command_spam_enabled:false});
+  assert.equal((await f.moderator.handle(next)).status,'command_spam_disabled');assert.ok(await f.store.seen(next.update_id));
+  f.advance(3);await f.configure({command_spam_enabled:true});await f.moderator.handle({...next,update_id:20000});
+  assert.equal(f.of('deleteMessage').length,2,'disabled retry cannot resurrect after re-enable');
+});
+
+test('multiple clean edits advance a cancellation watermark against out-of-order spam edits',async t=>{
+  const f=await fixture(t);f.hooks.set('deleteMessage',()=>{throw new TelegramError('Too Many Requests',429,false,10);});
+  const original=f.message({text:LONG_COMMAND});await f.moderator.handle(original);f.advance(1);
+  await f.moderator.handle(f.message({...original.message,edit_date:f.clock(),text:'First clean edit'},true));
+  f.advance(2);
+  await f.moderator.handle(f.message({...original.message,edit_date:f.clock(),text:'Latest clean edit'},true));
+  f.hooks.delete('deleteMessage');
+  const delayed=f.message({...original.message,edit_date:START+2,text:LONG_COMMAND},true);
+  assert.equal((await f.moderator.handle(delayed)).status,'command_spam_duplicate');
+  f.advance(8);await f.moderator.handle(original);assert.equal(f.of('deleteMessage').length,1);
+});
+
+test('a clean edit delivered before its original webhook protects current text without storing its body',async t=>{
+  const f=await fixture(t),original=f.message({text:LONG_COMMAND});f.advance(1);
+  await f.moderator.handle(f.message({...original.message,edit_date:f.clock(),text:'Clean edit arrived first'},true));
+  assert.equal((await f.moderator.handle(original)).status,'command_spam_duplicate');
+  assert.equal(f.of('deleteMessage').length,0);
+  const saved=await f.db.prepare('SELECT * FROM pilot_guard_actions WHERE id=?').bind(`commandspam:${GROUP}:${original.message.message_id}`).first();
+  assert.equal(saved.status,'cancelled_edit');assert.ok(!JSON.stringify(saved).includes('Clean edit arrived first'));
+  f.advance(1);await f.moderator.handle(f.message({...original.message,edit_date:f.clock(),text:LONG_COMMAND},true));
+  assert.equal(f.of('deleteMessage').length,1);
+});
+
+test('long-code exceptions cannot exempt a forwarded code or concealed prohibited link',async t=>{
+  const f=await fixture(t,{command_spam_allowlist:LONG_COMMAND,flood_enabled:true,flood_limit:3,flood_window:10,flood_action:'mute'});
+  await f.moderator.handle(f.message({text:LONG_COMMAND,forward_origin:{type:'hidden_user',date:START-1,sender_user_name:'Person'}}));
+  assert.equal(f.of('banChatMember').length,1);assert.equal((await f.store.member(GROUP,USER)).strikes,1);
+  await f.moderator.handle(f.message({text:LONG_COMMAND,from:{id:USER+5},entities:[{type:'text_link',offset:0,length:LONG_COMMAND.length,url:'https://forbidden.example'}]}));
+  assert.equal(f.of('banChatMember').length,2);assert.equal(f.of('restrictChatMember').length,0);
+});

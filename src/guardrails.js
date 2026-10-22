@@ -1,6 +1,7 @@
 import {createGuardrailStore} from './guardrail-store.js';
 import {escapeHtml} from './policy.js';
 import {fillTemplate,memberName,publicGroupRules} from './templates.js';
+import {detectCommandSpam} from './command-spam.js';
 
 const admin=role=>['creator','administrator'].includes(role?.status);
 const positive=id=>Number.isSafeInteger(Number(id)) && Number(id)>0;
@@ -8,13 +9,123 @@ const failure=error=>error?.ambiguous===false ? 'failed' : 'unknown';
 const activeJoin=['review','challenged'];
 function fail(code,status=409) {const error=new Error(code);error.code=code;error.status=status;throw error;}
 
-/** These optional rules run in the same group queue as the primary policy.
- * Flood actions never create a strike. Pending joins are never banned on timeout.
+/** These configurable rules run in the same group queue as the primary policy.
+ * Slash-code cleanup is silent and delete-only. Neither it nor flood creates a
+ * link/forward strike. Pending joins are never banned on timeout.
  */
 export function createGuardrails({db,store,controlStore,api,clock,me,say}) {
   const records=createGuardrailStore(db);
   const member=(chat,user)=>api.call('getChatMember',{chat_id:Number(chat),user_id:Number(user)});
   const audit=(id,chat,action,target,details={})=>controlStore.audit({id,chatId:chat,action,targetId:target,details,at:clock()});
+
+  async function commandSpam(message,settings) {
+    if(!['group','supergroup'].includes(message.chat?.type)) return null;
+    const detected=detectCommandSpam(message,settings.command_spam_allowlist || '');
+    const chat=message.chat.id,now=clock(),date=Number(message.date || 0),time=Number(message.edit_date || date);
+    if(!detected || settings.command_spam_enabled===false) {
+      if(Number.isSafeInteger(chat) && chat<0 && Number.isSafeInteger(message.message_id) && message.message_id>0
+        && Number.isSafeInteger(time) && time>0 && time<=now+60 && (message.edit_date || detected)) {
+        // A later clean edit invalidates a pending retry of an older payload.
+        // This also applies while cleanup is disabled. For cancelled_edit,
+        // updated_at is the latest observed cancellation event time; advance it
+        // monotonically so an out-of-order edit cannot revive an older payload.
+        await records.ensure();
+        // An UPSERT also protects a clean edit delivered before its original
+        // message webhook. It stores identifiers/event time only, not content.
+        await records.run("INSERT INTO pilot_guard_actions(id,chat_id,kind,status,created_at,updated_at) VALUES(?,?,'command_spam','cancelled_edit',?,?) ON CONFLICT(id) DO UPDATE SET status='cancelled_edit',updated_at=excluded.updated_at WHERE pilot_guard_actions.kind='command_spam' AND ((pilot_guard_actions.status IN ('retry_1','retry_2') AND pilot_guard_actions.created_at<=excluded.updated_at) OR (pilot_guard_actions.status='cancelled_edit' AND pilot_guard_actions.updated_at<excluded.updated_at))",`commandspam:${chat}:${message.message_id}`,String(chat),time,time);
+      }
+      // Even when cleanup is switched off, repeating these same detected codes
+      // must not escalate through optional flood mutes.
+      return detected ? 'command_spam_disabled' : null;
+    }
+    if(!Number.isSafeInteger(chat) || chat>=0 || !Number.isSafeInteger(message.message_id) || message.message_id<=0) return 'command_spam_ignored';
+    if(String(message.sender_chat?.id)===String(chat)) return 'anonymous_admin';
+    if(!message.sender_chat && (message.from?.is_bot || !positive(message.from?.id))) return 'command_spam_exempt';
+    if(!Number.isSafeInteger(date) || date<=0 || !Number.isSafeInteger(time) || time<=0 || date>now+60 || time>now+60 || now-date>=48*3600) return 'command_spam_stale';
+    const group=await store.group(chat);
+    if(!group.enabled || time<Math.max(group.activated_at,Number(await store.setting('ready_since') || 0))) return 'paused_or_old';
+    const id=`commandspam:${chat}:${message.message_id}`;
+    await records.ensure();
+    let previous=await records.first('SELECT status,created_at,updated_at FROM pilot_guard_actions WHERE id=?',id);
+    let retry=/^retry_([12])$/.exec(previous?.status || '');
+    if(previous) {
+      // created_at is this rule's source event time. An older webhook payload
+      // must not delete a message after a newer edit has already been observed.
+      if(time<previous.created_at) return 'command_spam_duplicate';
+      if(retry && message.edit_date && time>previous.created_at) {
+        await records.run("UPDATE pilot_guard_actions SET created_at=? WHERE id=? AND status=? AND created_at=?",time,id,previous.status,previous.created_at);
+        previous={...previous,created_at:time};
+      }
+      if(retry && now<previous.updated_at) return 'command_spam_retry';
+      if(!retry && !(previous.status==='cancelled_edit' && message.edit_date && time>previous.updated_at)) return 'command_spam_duplicate';
+    }
+    const bot=await me(),user=message.sender_chat ? null : Number(message.from.id);
+    if(user===Number(bot.id)) return 'self';
+    if(message.sender_chat) {
+      if(!Number.isSafeInteger(message.sender_chat.id) || message.sender_chat.id>=0) return 'command_spam_ignored';
+      const info=await api.call('getChat',{chat_id:chat});
+      if(String(info.linked_chat_id)===String(message.sender_chat.id)) return 'linked_channel';
+    } else {
+      const live=await member(chat,user);
+      if(admin(live)) return 'admin';
+      if(!['member','restricted'].includes(live.status)) return 'command_spam_inactive_member';
+      const prior=await store.first('SELECT override_at FROM members WHERE chat_id=? AND user_id=?',String(chat),String(user));
+      if(prior && time<=prior.override_at) return 'admin_override';
+    }
+    // This rule needs only delete permission. It never calls a restriction API,
+    // creates a link/forward incident, or adds a member strike.
+    const own=await member(chat,bot.id);
+    if(!admin(own) || !own.can_delete_messages) {
+      await records.health(chat,'command_spam_action_failed',true,now);
+      return 'command_spam_missing_permission';
+    }
+    // Fresh verification immediately before claiming and deleting also protects
+    // a member promoted, or a channel linked, while earlier checks were running.
+    if(message.sender_chat) {
+      const info=await api.call('getChat',{chat_id:chat});
+      if(String(info.linked_chat_id)===String(message.sender_chat.id)) return 'linked_channel';
+    } else {
+      const live=await member(chat,user);
+      if(admin(live)) return 'admin';
+      if(!['member','restricted'].includes(live.status)) return 'command_spam_inactive_member';
+    }
+    const target=user ?? message.sender_chat.id;
+    let attempt=1;
+    if(previous?.status==='cancelled_edit') {
+      const claimed=await records.run("UPDATE pilot_guard_actions SET status='sending',target_id=?,created_at=?,updated_at=? WHERE id=? AND status='cancelled_edit' AND updated_at<?",String(target),time,clock(),id,time);
+      if(!(claimed.meta?.changes ?? claimed.changes ?? 0)) return 'command_spam_duplicate';
+    } else if(retry) {
+      // For retry_N only, updated_at is the next permitted attempt time. No
+      // uncertain deletion is replayed; only Telegram's definite 429 rejection.
+      const claimed=await records.run("UPDATE pilot_guard_actions SET status='sending',updated_at=? WHERE id=? AND status=? AND created_at=? AND updated_at<=?",clock(),id,previous.status,time,clock());
+      if(!(claimed.meta?.changes ?? claimed.changes ?? 0)) return 'command_spam_retry';
+      attempt=Number(retry[1])+1;
+    } else if(!await records.claim({id,chatId:chat,targetId:target,kind:'command_spam',now:time})) {
+      return 'command_spam_duplicate';
+    }
+    try {
+      const deleted=await api.call('deleteMessage',{chat_id:chat,message_id:message.message_id});
+      if(deleted!==true) throw new Error('Unconfirmed deletion');
+    } catch(error) {
+      if(!(error.code===400 && /message to delete not found/i.test(error.message || ''))) {
+        const delay=Number.isSafeInteger(error.retryAfter) && error.retryAfter>0 ? error.retryAfter : 1;
+        if(error.code===429 && error.ambiguous===false && attempt<3 && clock()+delay<date+48*3600) {
+          await records.finish(id,`retry_${attempt}`,clock()+delay);
+          return 'command_spam_retry';
+        }
+        const outcome=failure(error);
+        await records.finish(id,outcome,clock());
+        await records.health(chat,'command_spam_action_failed',true,clock());
+        await audit(id,chat,'command_spam_review',target,{action:outcome,...detected});
+        return 'command_spam_review';
+      }
+    }
+    await records.finish(id,'deleted',clock());
+    await records.health(chat,'command_spam_action_failed',false,clock());
+    await audit(id,chat,'command_spam_deleted',target,{action:'deleted',...detected});
+    // Silent by design: repeated codes do not create repeated bot notices.
+    return 'command_spam';
+  }
 
   async function flood(message,settings) {
     const chat=message.chat.id,now=clock(),time=Number(message.date || 0);
@@ -232,5 +343,5 @@ export function createGuardrails({db,store,controlStore,api,clock,me,say}) {
     await records.ensure();
     await records.run('DELETE FROM pilot_flood_events WHERE chat_id=? AND user_id=?',String(chat),String(user));
   }
-  return {flood,welcome,membership,joinRequest,callback,control,humanOverride,records};
+  return {commandSpam,flood,welcome,membership,joinRequest,callback,control,humanOverride,records};
 }

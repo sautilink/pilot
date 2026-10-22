@@ -218,10 +218,15 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
         const rules=isGroup ? await controlStore.rules(message.chat.id) : [];
         const groupViolation=isGroup && analyzeMessage(message,rules).reasons.length>0;
         let optionalAction=null;
-        if(update.message && isGroup && !groupViolation) {
+        if(isGroup && !groupViolation) {
           const settings=await controlStore.settings(message.chat.id);
-          optionalAction=await guards.flood(message,settings);
-          for(const user of message.new_chat_members || []) await guards.welcome(message.chat.id,user,Number(message.date || clock()),settings);
+          // Long slash codes are delete-only, including edits and captions. Run
+          // this before flood counting so repeating them can never trigger mute.
+          optionalAction=await guards.commandSpam(message,settings);
+          if(update.message) {
+            if(!optionalAction) optionalAction=await guards.flood(message,settings);
+            for(const user of message.new_chat_members || []) await guards.welcome(message.chat.id,user,Number(message.date || clock()),settings);
+          }
         }
         if(optionalAction) status=optionalAction;
         else if(update.message && !groupViolation && await experience.handleCommand(message,update.update_id)) status='command';
@@ -230,7 +235,7 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
     }
     // A ban can succeed while its HTTP response is lost. Telegram must retry
     // this update so we can reconcile membership without issuing another ban.
-    if(status==='uncertain' || status==='notification_pending') return {status,retry:true};
+    if(status==='uncertain' || status==='notification_pending' || status==='command_spam_retry') return {status,retry:true};
     await store.done(update.update_id,clock());
     return {status};
   }

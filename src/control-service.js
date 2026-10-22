@@ -2,6 +2,7 @@ import { createStore } from './store.js';
 import { createControlStore, CONTROL_DEFAULTS, safeAuditDetails } from './control-store.js';
 import { detectLinks, explainUrl, normalizeWhitelistRule } from './policy.js';
 import { createGuardrailStore } from './guardrail-store.js';
+import { normalizeCommandExceptions } from './command-spam.js';
 
 export class ControlError extends Error {
   constructor(code, status = 400) {
@@ -63,6 +64,8 @@ function normalizeSettings(input) {
     } else if (enums[key]) {
       if (!enums[key].includes(value)) fail('invalid_settings');
       result[key] = value;
+    } else if (key === 'command_spam_allowlist') {
+      try { result[key] = normalizeCommandExceptions(value); } catch { fail('invalid_settings'); }
     } else if (key.startsWith('welcome_')) result[key] = template(value, 400, ['user', 'group', 'rules']);
     else if (key.startsWith('notice_')) result[key] = template(value, 240, ['user', 'reason', 'duration', 'group']);
     else result[key] = boundedString(value, 600, 'invalid_settings', { empty: true });

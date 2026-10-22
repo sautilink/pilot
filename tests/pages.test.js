@@ -4,6 +4,18 @@ import vm from 'node:vm';
 import { webcrypto } from 'node:crypto';
 import { renderHome, renderSetup, renderPrivacy } from '../src/pages.js';
 
+test('public pages explain silent command deletion and the stored admin exceptions in both languages', () => {
+  for (const lang of ['sw', 'en']) {
+    const home = renderHome({ username: 'sautilinkpilotbot', ready: true, lang });
+    assert.match(home, lang === 'en' ? /Command spam/ : /Spam ya commands/);
+    assert.match(home, lang === 'en' ? /without a ban, mute or strike/ : /bila ban, mute wala kosa/);
+    assert.match(home, lang === 'en' ? /admins can add exceptions or turn it off/ : /admin anaweza kuweka exceptions au kukizima/);
+    const privacy = renderPrivacy(lang);
+    assert.match(privacy, lang === 'en' ? /command exceptions/ : /exceptions za commands/);
+    assert.match(privacy, lang === 'en' ? /without retaining the deleted code/ : /bila kuhifadhi code iliyoondolewa/);
+  }
+});
+
 test('public page only creates the add-to-group link for a ready, valid bot identity', () => {
   assert.match(renderHome({ username: 'sautilinkpilotbot', ready: true }), /https:\/\/t\.me\/sautilinkpilotbot\?startgroup=pilot/);
   for (const options of [undefined, { username: 'sautilinkpilotbot', ready: false }, { username: 'bad/name', ready: true }, { username: '\"><script>alert(1)</script>', ready: true }]) {

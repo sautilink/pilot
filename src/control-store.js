@@ -1,3 +1,5 @@
+import { normalizeCommandExceptions } from './command-spam.js';
+
 export const CONTROL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS pilot_group_settings (
   chat_id TEXT PRIMARY KEY, settings_json TEXT NOT NULL DEFAULT '{}', updated_at INTEGER NOT NULL
@@ -49,6 +51,7 @@ export const CONTROL_DEFAULTS = Object.freeze({
   welcome_enabled: false, welcome_sw: '', welcome_en: '', rules_sw: '', rules_en: '',
   notice_template: 'detailed', notice_sw: '', notice_en: '',
   flood_enabled: false, flood_limit: 8, flood_window: 10, flood_action: 'delete', flood_mute_seconds: 300,
+  command_spam_enabled: true, command_spam_allowlist: '',
   join_gate_enabled: false, join_gate_mode: 'review',
 });
 
@@ -77,7 +80,13 @@ export function createControlStore(db) {
       const row = await first('SELECT settings_json FROM pilot_group_settings WHERE chat_id=?', String(chat));
       let saved;
       try { saved = JSON.parse(row?.settings_json || '{}'); } catch { saved = {}; }
-      return { ...CONTROL_DEFAULTS, ...Object.fromEntries(Object.entries(saved || {}).filter(([key]) => Object.hasOwn(CONTROL_DEFAULTS, key))) };
+      const settings = { ...CONTROL_DEFAULTS, ...Object.fromEntries(Object.entries(saved || {}).filter(([key]) => Object.hasOwn(CONTROL_DEFAULTS, key))) };
+      // Old group settings inherit the delete-only filter. Invalid manually
+      // stored values cannot turn into broad command exceptions or an action.
+      if (typeof settings.command_spam_enabled !== 'boolean') settings.command_spam_enabled = CONTROL_DEFAULTS.command_spam_enabled;
+      try { settings.command_spam_allowlist = normalizeCommandExceptions(settings.command_spam_allowlist); }
+      catch { settings.command_spam_allowlist = CONTROL_DEFAULTS.command_spam_allowlist; }
+      return settings;
     },
     async rules(chat) {
       await ensure();

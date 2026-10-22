@@ -30,6 +30,19 @@ test('monitoring sends nothing without a per-admin opt-in',async t=>{
   assert.equal(f.of('sendMessage').length,0);
 });
 
+test('command-spam deletion failures are localized private alerts for opted-in admins',async t=>{
+  for(const language of ['sw','en']) {
+    const f=await fixture(t);await f.subscribe({alerts:1});await f.store.setLanguage('user',ADMIN,language,NOW);
+    await f.guards.health(GROUP,'command_spam_action_failed',true,NOW);
+    await f.run();
+    assert.equal(f.of('sendMessage').length,1);
+    assert.equal(f.of('sendMessage')[0].p.chat_id,Number(ADMIN));
+    assert.match(f.of('sendMessage')[0].p.text,language==='en'?/Deletion of a command-spam message could not be confirmed/:/Ufutaji wa ujumbe wa spam ya commands haujathibitishwa/);
+    assert.match(f.of('sendMessage')[0].p.text,language==='en'?/No restriction was applied/:/hakijaweka restriction yoyote/);
+    f.advance(600);await f.run();assert.equal(f.of('sendMessage').length,1);
+  }
+});
+
 test('alerts are private, localized, rate-limited and only for current admins',async t=>{
   const f=await fixture(t);await f.subscribe({alerts:1});await f.store.setLanguage('user',ADMIN,'en',NOW);
   await f.store.run('UPDATE groups SET enabled=0');await f.run();

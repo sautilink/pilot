@@ -90,7 +90,7 @@ The server verifies Telegram's signed `initData` using the bot-token HMAC scheme
 
 ### Defaults and controls
 
-The existing link/forward policy stays active. Additional moderation behavior starts disabled and is enabled separately by a verified group admin.
+The existing link/forward policy stays active. Command spam removal starts **enabled**, including for existing groups that have not saved a choice for it. A verified group admin can disable it or add exceptions for that group. Welcomes, flood control and join screening remain disabled until an admin enables them.
 
 | Feature | Initial state | Behavior when enabled or configured |
 | --- | --- | --- |
@@ -98,13 +98,15 @@ The existing link/forward policy stays active. Additional moderation behavior st
 | Welcome messages | Off | Sends a bilingual, customizable welcome after a member joins |
 | Group rules note | Empty | Appends a plain-text note to public rules and relevant welcome/join messages |
 | Notice style | Detailed | Admin can choose detailed, compact, or formal notices and an extra plain-text message |
+| Command spam removal | On | Silently deletes messages or captions made up of unapproved long slash-command codes; never adds a ban, mute or strike |
+| Command exceptions | Empty | Exact or prefix allowances for the selected group’s command filter only |
 | Anti-flood | Off | Default threshold is more than 8 messages in 10 seconds; removes excess messages |
 | Optional flood mute | Off; flood action defaults to delete | Admin may choose a 1–60 minute mute for eligible ordinary members in a supergroup; the default duration is 5 minutes |
 | Join request screening | Off | Admin chooses manual review or a short rules acknowledgement with a simple arithmetic question |
 | Problem alerts | Off for each admin/group | Opted-in admins receive private, throttled alerts while they retain their role |
 | Scheduled reports | Off for each admin/group | Opted-in admins choose a daily or weekly private summary |
 
-Pausing moderation also pauses automated flood actions, welcomes and challenge approval. Admins can still review records and make deliberate decisions.
+Pausing moderation also pauses command spam removal, automated flood actions, welcomes and challenge approval. Admins can still review records and make deliberate decisions.
 
 ### Link checker and per-group allowances
 
@@ -145,6 +147,30 @@ All custom copy is plain text; it cannot supply arbitrary HTML. Unsupported plac
 | Additional group rules | 600 characters | Plain text |
 
 The group language determines which version is sent. Default welcome text is used if the corresponding custom field is empty. A configured notice adds to the confirmed-action facts: name/ID, reason, strike, duration and expiry remain present in every style. Expanded welcome text is capped at 3,500 characters, and the extra notice message at 800, so repeated placeholders cannot make the final message unbounded. The preview helps admins check wording before saving. Welcome events are deduplicated so overlapping join notifications do not produce repeated greetings.
+
+### Command spam removal
+
+**This feature only deletes messages. It never bans, mutes, restricts or adds a strike, and it sends no public deletion notice.** The filter runs before flood counting, so a matching command-spam message does not count toward a flood mute. A separate link or forward violation still follows the existing link/forward policy.
+
+By default, Pilot checks new and edited group messages and captions for content consisting entirely of one or more whitespace-separated slash tokens, starting with a command name longer than 32 characters. It removes the message if any long command name is not allowlisted. Names are ASCII letters, digits or underscores. A normal short command at the start keeps its arguments outside this filter, even if an argument is itself a long slash code. A `@BotUsername` suffix does not automatically exempt a long code. The full token is inspected rather than trusting the clickable entity’s length. This is a conservative format rule, not a claim that every long code is malicious.
+
+Ordinary commands such as `/help`, `/play@MusicBot`, and `/start long_argument` remain available. General prose, file paths, mentions, hashtags, and Telegram-formatted code/preformatted examples are outside this filter when formatting covers the full token. Bot-sent messages, the group’s owner/admins/anonymous admins, and its actual linked channel remain exempt. Group pause, activation time and human overrides are respected, and Telegram admin status is checked again before deletion. The bot requires **Delete messages** permission for this feature. Telegram’s 48-hour deletion limit is measured from the original message date, including on edits; this does not scan or clear old chat history.
+
+In **Dashboard → selected group → Settings → Command spam**, admins can switch the filter off or enter command exceptions. The private `/settings` summary shows its state; confirmed deletions and unconfirmed outcomes appear in the group’s activity log. No deleted token or message body is stored there.
+
+A definitive Telegram rate-limit rejection waits for `retry_after` and permits at most three deletion attempts, with fresh permission and exemption checks before each attempt. Failed or uncertain outcomes are recorded for review. Observed clean edits leave only a message ID and event-time marker, so a delayed original update or retry cannot delete newer clean content. A strictly newer spam edit remains eligible; ambiguous edits within the same second are preserved. Detected command codes stay outside flood counting even when command cleanup is disabled.
+
+Each exception is one line, with at most **20 rules / 2,000 characters** total:
+
+| Example | Scope |
+| --- | --- |
+| `/get_ExampleOpaqueCode12345678901234567890` | This exact targetless command code |
+| `/get_*` | Targetless command names starting with `get_` |
+| `/get_*@ExampleBot` | Command names starting with `get_`, addressed specifically to `@ExampleBot` |
+
+Names are case-sensitive; bot target usernames are case-insensitive. Targetless rules match only targetless commands. Exact names allow 1–128 ASCII letters, digits or underscores. A prefix allows 3–32 of those characters followed by one `*`; the optional bot username is 5–32 characters and ends in `bot`. Blank lines and duplicate rules are normalized. Spaces inside rules, bare wildcards, URLs and arbitrary regular expressions are rejected. An exception only bypasses this command-code filter; it does not bypass links, forwards or admin authorization.
+
+Pilot does not automatically know the private/custom command formats of every other bot. If a group needs an unusual dynamic command, an admin should add its exact or appropriately scoped prefix exception. Ordinary members cannot create exceptions by posting a command.
 
 ### Anti-flood and join requests
 
@@ -314,7 +340,8 @@ Use a separate ordinary test account; admins are intentionally exempt. Add the b
 - Check a link privately, then add an extra allowance to one test group and confirm another group is unaffected.
 - Submit an appeal from the affected member and verify that only the relevant group's admins can review it.
 - Distinguish a one-strike correction from a full `/forgive` reset, and from ban removal.
-- Opt in to welcomes or flood control in a test group; verify the initial defaults remain off elsewhere.
+- Verify long slash-code messages and edited captions are removed silently without a ban, mute or strike; ordinary commands and configured exceptions must pass. Disable the filter for one group and confirm the choice does not affect another.
+- Opt in to welcomes or flood control in a test group; verify their initial defaults remain off elsewhere.
 - Enable join requests and Invite users before checking challenge/manual-review behavior; timeout must not ban an applicant.
 - Opt into notifications for a test admin and verify private delivery before relying on reports.
 - Verify owner pairing and the private draft preview without confirming a broadcast to live groups; nonowners must not receive target counts or owner controls.
@@ -337,7 +364,7 @@ The automated suite uses a fake Telegram API, real local SQLite, and browser-scr
 
 D1 stores chat/user IDs, per-group strike counts, incident reason categories/action status, and processed update IDs. Delivery records add the notice state, attempt count, retry time, categorized error, and Telegram message ID when confirmed. Admin selections store the person and last selected group; these records never substitute for a fresh Telegram role check. Language preferences store separate `user` and `group` choices. Service settings also hold readiness, bot identity, and experience-upgrade metadata.
 
-The database does not retain ordinary moderated message bodies, their media or captions, member display names from moderation, supplied checker text, or bot tokens. It does intentionally store admin-entered group rules and templates, configured whitelist destinations, and member-written appeal text, along with case/audit/operation metadata and notification preferences. Join screening stores identifiers, a temporary challenge answer and delivery/decision state; it does not retain invite links or join-request bios. Incoming text and names are processed for the current update and may appear in messages sent to Telegram. The public `/privacy` page describes the stored metadata and retention in both languages.
+The database does not retain ordinary moderated message bodies, their media or captions, member display names from moderation, supplied checker text, or bot tokens. It does intentionally store admin-entered group rules and templates, configured whitelist destinations and command exceptions, and member-written appeal text, along with case/audit/operation metadata and notification preferences. Join screening stores identifiers, a temporary challenge answer and delivery/decision state; it does not retain invite links or join-request bios. Incoming text and names are processed for the current update and may appear in messages sent to Telegram. The public `/privacy` page describes the stored metadata and retention in both languages.
 
 Owner announcements deliberately retain the owner's selected text/caption, native entity data and Telegram media file IDs, along with a content hash, target group IDs, preview ID, delivery outcomes and action records. Media files are not downloaded into D1. The owner binding stores the permanent numeric user ID and pairing time; an unclaimed pairing code is held only as a temporary hash. The connection registry stores group IDs and observed bot membership states, without group conversation content.
 
@@ -354,7 +381,7 @@ Daily cleanup applies these rules. Control-history deletion uses bounded batches
 | Verified admin/group discovery associations | Eligible for deletion 180 days after their last verification; every use still rechecks the role |
 | Join request/challenge records | Removed when the request is older than 7 days |
 | Flood event counters | Entries older than 120 seconds are pruned during relevant traffic and scheduled cleanup |
-| Welcome/flood/join-action delivery records and private admin deliveries | Removed after 30 days |
+| Welcome/flood/command/join-action delivery records and private admin deliveries | Removed after 30 days |
 | Resolved health events | Removed 30 days after resolution; unresolved events remain available for review |
 | Per-admin notification preferences | Retained for operation, including an opted-out/disabled state; delivery always rechecks the current role |
 | Member strike totals | No automatic expiry; `/forgive` resets the count for the relevant group |
@@ -391,6 +418,7 @@ node --test --test-isolation=none tests/*.test.js
 ### Main files
 
 - `src/policy.js`: URL allowlist and forward detection.
+- `src/command-spam.js`: conservative long slash-code classification and bounded per-group command exceptions.
 - `src/moderator.js`: enforcement, escalation, membership changes, and safe reconciliation.
 - `src/commands.js`: commands, callbacks, fresh admin authorization, selected-group context, and language choices.
 - `src/feature-commands.js`: private link checks, personal cases, appeals, verified group summaries, and opt-in commands.
@@ -400,7 +428,7 @@ node --test --test-isolation=none tests/*.test.js
 - `src/dashboard.js`: responsive bilingual Mini App and its authenticated controls.
 - `src/miniapp-auth.js` and `src/dashboard-api.js`: Telegram identity validation, request validation, and group-queue routing.
 - `src/control-store.js` and `src/control-service.js`: per-group settings, custom allowances, case review, appeals, subscriptions, authorization, operation idempotency and audit records.
-- `src/guardrails.js`, `src/guardrail-store.js` and `src/templates.js`: optional flood control, welcomes, join screening and safe custom copy.
+- `src/guardrails.js`, `src/guardrail-store.js` and `src/templates.js`: silent command spam removal, optional flood control, welcomes, join screening and safe custom copy.
 - `src/monitoring.js`: opted-in private alerts/reports and protected operator health summaries.
 - `src/bot-ui.js`: bilingual private pages, inline navigation, command scopes, profile copy, and experience version.
 - `src/announcements.js`: bilingual penalty notices, safe text formatting, delivery tracking, and bounded retry/fallback behavior.

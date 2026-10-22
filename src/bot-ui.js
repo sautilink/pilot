@@ -1,6 +1,6 @@
 import { escapeHtml } from './policy.js';
 
-export const EXPERIENCE_VERSION = '2026-10-22.2';
+export const EXPERIENCE_VERSION = '2026-10-22.3';
 export const BOT_DESCRIPTION = 'SautiLink Pilot husaidia kusimamia Telegram groups kwa sheria wazi, moderation ya links na forwards, na matangazo yenye sababu. Kagua link, ona matukio yako au tuma rufaa. Admin ana paneli ya faragha ya historia, mipangilio, takwimu na zana za ziada. Chagua Kiswahili au English uanze.';
 export const BOT_SHORT_DESCRIPTION = 'Msaidizi wa group: moderation, kikagua link, rufaa na paneli ya admin. Kiswahili / English.';
 
@@ -12,7 +12,7 @@ export const PUBLIC_COMMANDS = [
   { command: 'appeal', description: 'Omba admin apitie tukio lako' },
   { command: 'about', description: 'Kuhusu SautiLink Pilot' },
   { command: 'howitworks', description: 'Jinsi moderation inavyofanya kazi' },
-  { command: 'rules', description: 'Sheria za links na forwarded messages' },
+  { command: 'rules', description: 'Sheria za links, forwards na spam ya commands' },
   { command: 'connect', description: 'Ongeza bot kwenye group lako' },
   { command: 'developer', description: 'Mradi na taarifa za SautiLink' },
   { command: 'help', description: 'Msaada wa kutumia bot' },
@@ -77,15 +77,15 @@ export function renderBotPage(page, context = {}) {
       rows = [[{ text: '✓ Kiswahili', callback_data: 'pilot:lang:sw' }, { text: 'English', callback_data: 'pilot:lang:en' }], [homeButton()]];
       break;
     case 'about':
-      text = '✦ <b>Kuhusu SautiLink Pilot</b>\n\nMsaidizi wa usimamizi wa Telegram groups. Pilot huondoa links zisizoruhusiwa na forwarded messages, huku ikifuata sheria zilezile kwa wanachama wa group.\n\nKila group lina historia yake ya makosa. Owner na admins wa group wanaendelea kusimamia maamuzi ya group lao.\n\nPia unaweza kukagua link kabla ya kuituma, kuona matukio yako na kuomba admin apitie uamuzi. Zana za ziada za group huwashwa na admin.\n\nChagua sehemu hapa chini kujua zaidi.';
+      text = '✦ <b>Kuhusu SautiLink Pilot</b>\n\nMsaidizi wa usimamizi wa Telegram groups. Pilot huondoa links zisizoruhusiwa na forwarded messages, huku ikifuata sheria zilezile kwa wanachama wa group.\n\nKila group lina historia yake ya makosa. Owner na admins wa group wanaendelea kusimamia maamuzi ya group lao.\n\nPia unaweza kukagua link kabla ya kuituma, kuona matukio yako na kuomba admin apitie uamuzi. Admin huchagua mipangilio ya group. Code ndefu za commands zisizoruhusiwa hufutwa kimya kimya ikiwa kichujio kimewashwa, bila ban au mute.\n\nChagua sehemu hapa chini kujua zaidi.';
       rows = [[button('🧭 Inavyofanya kazi', 'how'), button('📋 Sheria', 'rules')], [homeButton()]];
       break;
     case 'how':
-      text = '🧭 <b>Jinsi Pilot inavyofanya kazi</b>\n\n<b>1. Hukagua ujumbe</b>\nHutambua links zisizoruhusiwa na ujumbe uliotumwa kwa Forward. Ujumbe uliohaririwa hukaguliwa pia.\n\n<b>2. Huondoa ujumbe unaovunja sheria</b>\nLinks zilizoruhusiwa zinaweza kutumwa moja kwa moja. Forward bado inafuata sheria ya forwarded messages.\n\n<b>3. Hufuata hatua za adhabu</b>\nKosa la kwanza: saa 24. La pili: siku 7. La tatu: ban ya kudumu. Makosa huhesabiwa ndani ya kila group.\n\n<b>4. Hutoa sababu</b>\nBan ikithibitishwa, Pilot hutuma tangazo la hatua na sababu kwenye group. Admin anaweza kukagua hali kupitia paneli yake ya faragha.';
+      text = '🧭 <b>Jinsi Pilot inavyofanya kazi</b>\n\n<b>1. Hukagua ujumbe</b>\nHutambua links zisizoruhusiwa na ujumbe uliotumwa kwa Forward. Ujumbe uliohaririwa hukaguliwa pia.\n\n<b>2. Huondoa ujumbe unaovunja sheria</b>\nLinks zilizoruhusiwa zinaweza kutumwa moja kwa moja. Forward bado inafuata sheria ya forwarded messages.\n\n<b>3. Hufuata adhabu za links na forwards</b>\nKosa la kwanza: saa 24. La pili: siku 7. La tatu: ban ya kudumu. Makosa huhesabiwa ndani ya kila group.\n\n<b>4. Hutoa sababu</b>\nBan ikithibitishwa, Pilot hutuma tangazo la hatua na sababu kwenye group. Admin anaweza kukagua hali kupitia paneli yake ya faragha.\n\n<b>Code ndefu za commands</b>\nKichujio kikiwa kimewashwa, ujumbe wenye code ndefu za /command tu zisizoruhusiwa hufutwa kimya kimya. Hakuna ban, mute wala kosa kwa code hizo. Commands za kawaida zinaendelea kufanya kazi.';
       rows = [[button('📋 Sheria kamili', 'rules'), button('➕ Ongeza kwenye group', 'connect')], [homeButton()]];
       break;
     case 'rules':
-      text = '📋 <b>Sheria za SautiLink Pilot</b>\n\n• Links zisizoruhusiwa na forwarded messages huondolewa.\n• Kosa 1: ban saa 24. Kosa 2: siku 7. Kosa 3: ban ya kudumu. Historia ni ya kila group.\n• HTTPS za <b>sautilink.com</b> na subdomains zake zinaruhusiwa.\n• Links za <b>t.me/techhubtz</b>, <b>t.me/sautilink</b>, <b>t.me/sautilink_cloud</b> na <b>t.me/drcharlesofficial</b> zinaruhusiwa.\n• Forward haipati ruhusa kwa kuwa tu ina link iliyoruhusiwa.\n• Owner, admins, anonymous admins na ujumbe rasmi wa linked channel wameondolewa kwenye ukaguzi huu.\n\nAdmin anaweza kuongeza links zinazoruhusiwa kwa group lake. Kagua link faraghani kwa /checklink kabla ya kuituma.\n\nUna swali kuhusu hatua iliyochukuliwa? Fungua /mystatus kuona tukio lako na kutuma rufaa.';
+      text = '📋 <b>Sheria za SautiLink Pilot</b>\n\n• Links zisizoruhusiwa na forwarded messages huondolewa.\n• Kosa 1 la link au forward ni ban saa 24; kosa 2 siku 7; kosa 3 ban ya kudumu. Historia ni ya kila group.\n• HTTPS za <b>sautilink.com</b> na subdomains zake zinaruhusiwa.\n• Links za <b>t.me/techhubtz</b>, <b>t.me/sautilink</b>, <b>t.me/sautilink_cloud</b> na <b>t.me/drcharlesofficial</b> zinaruhusiwa.\n• Forward haipati ruhusa kwa kuwa tu ina link iliyoruhusiwa.\n• Kichujio cha commands kikiwa kimewashwa, ujumbe wenye code ndefu tu zisizoruhusiwa hufutwa kimya kimya. Hakuna ban, mute wala kosa kwa code hizo; commands za kawaida zinaendelea kupita.\n• Owner, admins, anonymous admins na ujumbe rasmi wa linked channel wameondolewa kwenye ukaguzi huu.\n\nAdmin anaweza kuongeza links zinazoruhusiwa kwa group lake. Kagua link faraghani kwa /checklink kabla ya kuituma.\n\nUna swali kuhusu hatua iliyochukuliwa? Fungua /mystatus kuona tukio lako na kutuma rufaa.';
       rows = [[button('🧭 Inavyofanya kazi', 'how'), button('❔ Msaada', 'help')], [homeButton()]];
       break;
     case 'connect':
@@ -97,7 +97,7 @@ export function renderBotPage(page, context = {}) {
       rows = [[{ text: '🌐 Tovuti ya Pilot', url: 'https://pilot.sautilink.com' }, { text: '⌘ GitHub na nyaraka', url: 'https://github.com/sautilink/pilot' }], [{ text: 'SautiLink', url: 'https://sautilink.com' }], [homeButton()]];
       break;
     case 'help':
-      text = '❔ <b>Tunaweza kukusaidiaje?</b>\n\n<b>Nataka kuelewa sheria</b>\nFungua /rules au /howitworks.\n\n<b>Nataka kuongeza bot</b>\nFungua /connect kwa hatua fupi za kuanza.\n\n<b>Mimi ni admin</b>\nTuma /admin ndani ya group lako, kisha fungua kiungo cha paneli ya faragha.\n\n<b>Nimefungiwa kwenye group</b>\nFungua /mystatus kuona tukio lako. Tuma /appeal kufuata hatua za kuomba ukaguzi. Ban ya muda ikiisha, unaweza kujiunga tena; bot haikurudishi moja kwa moja.\n\n<b>Nataka kukagua link kabla ya kuituma</b>\nTuma /checklink na link hapa faraghani, au tumia kikagua kwenye /dashboard.\n\nRudi /start wakati wowote kufungua menyu.';
+      text = '❔ <b>Tunaweza kukusaidiaje?</b>\n\n<b>Nataka kuelewa sheria</b>\nFungua /rules au /howitworks.\n\n<b>Nataka kuongeza bot</b>\nFungua /connect kwa hatua fupi za kuanza.\n\n<b>Mimi ni admin</b>\nTuma /admin ndani ya group lako, kisha fungua kiungo cha paneli ya faragha.\n\n<b>Code yangu ya command imefutwa</b>\nUjumbe wenye code ndefu tu unaweza kuondolewa na kichujio cha group. Hatua hii haina ban, mute wala kosa. Kama bot mwingine anahitaji code hiyo, muombe admin aongeze exception.\n\n<b>Nimefungiwa kwenye group</b>\nFungua /mystatus kuona tukio lako. Tuma /appeal kufuata hatua za kuomba ukaguzi. Ban ya muda ikiisha, unaweza kujiunga tena; bot haikurudishi moja kwa moja.\n\n<b>Nataka kukagua link kabla ya kuituma</b>\nTuma /checklink na link hapa faraghani, au tumia kikagua kwenye /dashboard.\n\nRudi /start wakati wowote kufungua menyu.';
       rows = [[button('📋 Sheria', 'rules'), button('➕ Ongeza bot', 'connect')], [button('🛡 Paneli ya admin', 'admin'), button('⌘ Mradi', 'developer')], [homeButton()]];
       break;
     case 'admin':
@@ -137,7 +137,7 @@ export function getPublicCommands(language = 'sw') {
     { command: 'appeal', description: 'Request an admin review of your case' },
     { command: 'about', description: 'About SautiLink Pilot' },
     { command: 'howitworks', description: 'How moderation works' },
-    { command: 'rules', description: 'Rules for links and forwarded messages' },
+    { command: 'rules', description: 'Rules for links, forwards and command spam' },
     { command: 'connect', description: 'Add Pilot to your group' },
     { command: 'developer', description: 'The SautiLink project and documentation' },
     { command: 'help', description: 'Get help using Pilot' },
@@ -201,15 +201,15 @@ function renderEnglishPage(page, context) {
       rows = [[{ text: 'Kiswahili', callback_data: 'pilot:lang:sw' }, { text: '✓ English', callback_data: 'pilot:lang:en' }], [home()]];
       break;
     case 'about':
-      text = '✦ <b>About SautiLink Pilot</b>\n\nAn assistant for Telegram group moderation. Pilot removes unapproved links and forwarded messages, applying consistent rules to group members.\n\nEach group has its own strike history. The group’s owner and admins remain in control of moderation decisions.\n\nYou can also check a link before posting, see your own cases and request an admin review. Additional group tools are enabled by admins.\n\nChoose a section below to learn more.';
+      text = '✦ <b>About SautiLink Pilot</b>\n\nAn assistant for Telegram group moderation. Pilot removes unapproved links and forwarded messages, applying consistent rules to group members.\n\nEach group has its own strike history. The group’s owner and admins remain in control of moderation decisions.\n\nYou can also check a link before posting, see your own cases and request an admin review. Admins choose the group settings. Unapproved long command codes are silently removed when the filter is enabled, without a ban or mute.\n\nChoose a section below to learn more.';
       rows = [[button('🧭 How it works', 'how'), button('📋 Rules', 'rules')], [home()]];
       break;
     case 'how':
-      text = '🧭 <b>How Pilot works</b>\n\n<b>1. Checks messages</b>\nPilot detects unapproved links and forwarded messages. Edited messages are checked too.\n\n<b>2. Removes rule-breaking messages</b>\nApproved links can be posted directly. Forwarded messages still follow the forwarding rule.\n\n<b>3. Applies escalating bans</b>\nFirst strike: 24 hours. Second: 7 days. Third: permanent. Strikes are counted separately for each group.\n\n<b>4. Explains the action</b>\nAfter a ban is confirmed, Pilot posts the action and reason in the group. Admins can check its status through their private panel.';
+      text = '🧭 <b>How Pilot works</b>\n\n<b>1. Checks messages</b>\nPilot detects unapproved links and forwarded messages. Edited messages are checked too.\n\n<b>2. Removes rule-breaking messages</b>\nApproved links can be posted directly. Forwarded messages still follow the forwarding rule.\n\n<b>3. Applies bans for links and forwards</b>\nFirst strike: 24 hours. Second: 7 days. Third: permanent. Strikes are counted separately for each group.\n\n<b>4. Explains the action</b>\nAfter a ban is confirmed, Pilot posts the action and reason in the group. Admins can check its status through their private panel.\n\n<b>Long command codes</b>\nWhen the filter is enabled, messages made up of unapproved long /command codes are silently deleted. These codes never add a ban, mute or strike. Ordinary commands remain available.';
       rows = [[button('📋 Read the rules', 'rules'), button('➕ Add to a group', 'connect')], [home()]];
       break;
     case 'rules':
-      text = '📋 <b>SautiLink Pilot rules</b>\n\n• Unapproved links and forwarded messages are removed.\n• First strike: 24-hour ban. Second: 7 days. Third: permanent. Each group has its own history.\n• HTTPS links to <b>sautilink.com</b> and its subdomains are allowed.\n• Links to <b>t.me/techhubtz</b>, <b>t.me/sautilink</b>, <b>t.me/sautilink_cloud</b> and <b>t.me/drcharlesofficial</b> are allowed.\n• An approved link does not exempt a forwarded message.\n• The owner, admins, anonymous admins, and official linked-channel messages are exempt from these checks.\n\nAdmins may allow additional links for their own group. Check a link privately with /checklink before posting.\n\nQuestions about a moderation decision? Open /mystatus to see your case and submit an appeal.';
+      text = '📋 <b>SautiLink Pilot rules</b>\n\n• Unapproved links and forwarded messages are removed.\n• Link and forward strikes: first is a 24-hour ban; second 7 days; third permanent. Each group has its own history.\n• HTTPS links to <b>sautilink.com</b> and its subdomains are allowed.\n• Links to <b>t.me/techhubtz</b>, <b>t.me/sautilink</b>, <b>t.me/sautilink_cloud</b> and <b>t.me/drcharlesofficial</b> are allowed.\n• An approved link does not exempt a forwarded message.\n• With the command filter enabled, messages made up of unapproved long codes are silently deleted. No ban, mute or strike for those codes; ordinary commands remain available.\n• The owner, admins, anonymous admins, and official linked-channel messages are exempt from these checks.\n\nAdmins may allow additional links for their own group. Check a link privately with /checklink before posting.\n\nQuestions about a moderation decision? Open /mystatus to see your case and submit an appeal.';
       rows = [[button('🧭 How it works', 'how'), button('❔ Help', 'help')], [home()]];
       break;
     case 'connect':
@@ -221,7 +221,7 @@ function renderEnglishPage(page, context) {
       rows = [[{ text: '🌐 Pilot website', url: 'https://pilot.sautilink.com' }, { text: '⌘ GitHub and docs', url: 'https://github.com/sautilink/pilot' }], [{ text: 'SautiLink', url: 'https://sautilink.com' }], [home()]];
       break;
     case 'help':
-      text = '❔ <b>How can we help?</b>\n\n<b>I want to understand the rules</b>\nOpen /rules or /howitworks.\n\n<b>I want to add the bot</b>\nOpen /connect for a quick setup guide.\n\n<b>I am a group admin</b>\nSend /admin inside your group, then open the link to your private panel.\n\n<b>I was banned from a group</b>\nOpen /mystatus to see your case. Send /appeal for the steps to request a review. When a temporary ban expires you may rejoin; the bot does not add you back automatically.\n\n<b>I want to check a link before posting</b>\nSend /checklink with the link here privately, or use the checker in /dashboard.\n\nReturn to /start whenever you want to open the menu.';
+      text = '❔ <b>How can we help?</b>\n\n<b>I want to understand the rules</b>\nOpen /rules or /howitworks.\n\n<b>I want to add the bot</b>\nOpen /connect for a quick setup guide.\n\n<b>I am a group admin</b>\nSend /admin inside your group, then open the link to your private panel.\n\n<b>My command code was deleted</b>\nA message made up of a long code may be removed by the group’s filter. This adds no ban, mute or strike. If another bot needs that code, ask an admin to add an exception.\n\n<b>I was banned from a group</b>\nOpen /mystatus to see your case. Send /appeal for the steps to request a review. When a temporary ban expires you may rejoin; the bot does not add you back automatically.\n\n<b>I want to check a link before posting</b>\nSend /checklink with the link here privately, or use the checker in /dashboard.\n\nReturn to /start whenever you want to open the menu.';
       rows = [[button('📋 Rules', 'rules'), button('➕ Add the bot', 'connect')], [button('🛡 Admin panel', 'admin'), button('⌘ Project', 'developer')], [home()]];
       break;
     case 'admin':

@@ -62,7 +62,7 @@ async function fixture(t) {
 
 const code = expected => error => error instanceof ControlError && error.code === expected;
 
-test('control schema is idempotent, matches its migration, and supplies disabled optional defaults', async t => {
+test('control schema is idempotent, matches its migration, and supplies current protection defaults', async t => {
   const f = await fixture(t);
   await f.control.ensure();
   await createControlStore(f.db).ensure();
@@ -71,6 +71,87 @@ test('control schema is idempotent, matches its migration, and supplies disabled
   assert.deepEqual(await f.control.subscription(ADMIN, GROUP), { alerts: false, report: 'off' });
   const migration = await readFile(new URL('../migrations/0003_control_center.sql', import.meta.url), 'utf8');
   assert.equal(migration.trim(), CONTROL_SCHEMA_SQL.trim());
+});
+
+test('command-spam deletion defaults on for new and legacy groups while explicit opt-outs persist', async t => {
+  const f = await fixture(t);
+  assert.equal((await f.control.settings(GROUP)).command_spam_enabled, true);
+  assert.equal((await f.control.settings(GROUP)).command_spam_allowlist, '');
+  await f.control.run('INSERT INTO pilot_group_settings VALUES(?,?,?)', String(GROUP), JSON.stringify({ welcome_enabled: true, flood_action: 'mute' }), START);
+  let settings = await f.control.settings(GROUP);
+  assert.equal(settings.command_spam_enabled, true);
+  assert.equal(settings.welcome_enabled, true);
+  assert.equal(settings.flood_action, 'mute');
+  await f.mutate('configure', { settings: { command_spam_enabled: false, command_spam_allowlist: '/get_*@MusicBot' } });
+  // A new store instance represents a later Worker request/deployment.
+  settings = await createControlStore(f.db).settings(GROUP);
+  assert.equal(settings.command_spam_enabled, false);
+  assert.equal(settings.command_spam_allowlist, '/get_*@musicbot');
+  assert.equal((await f.control.settings(OTHER)).command_spam_enabled, true);
+  assert.equal((await f.control.settings(OTHER)).command_spam_allowlist, '');
+});
+
+test('invalid stored command-spam settings safely fall back without creating broad exceptions', async t => {
+  const f = await fixture(t);
+  await f.control.run('INSERT INTO pilot_group_settings VALUES(?,?,?)', String(GROUP), JSON.stringify({ command_spam_enabled: 'false', command_spam_allowlist: '/*', command_spam_action: 'ban', rules_en: 'Be kind.' }), START);
+  const settings = await f.control.settings(GROUP);
+  assert.equal(settings.command_spam_enabled, true);
+  assert.equal(settings.command_spam_allowlist, '');
+  assert.equal(settings.rules_en, 'Be kind.');
+  assert.equal(Object.hasOwn(settings, 'command_spam_action'), false);
+});
+
+test('command exceptions normalize per group and configuration retries do not duplicate mutations', async t => {
+  const f = await fixture(t);
+  const requestId = 'command-rules:configure:1';
+  const exact = '/AbC123_' + 'X'.repeat(40);
+  const result = await f.mutate('configure', { settings: { command_spam_allowlist: `  ${exact}\r\n/get_*@MusicBot\n${exact}\n` } }, { requestId });
+  assert.equal(result.settings.command_spam_allowlist, `${exact}\n/get_*@musicbot`);
+  const repeated = await f.mutate('configure', { settings: { command_spam_allowlist: `${exact}\n/get_*@musicbot` } }, { requestId });
+  assert.equal(repeated.duplicate, true);
+  const audit = await f.control.all('SELECT action,details_json FROM pilot_audit');
+  assert.equal(audit.length, 1);
+  assert.equal(audit[0].action, 'configure');
+  assert.deepEqual(JSON.parse(audit[0].details_json), { keys: ['command_spam_allowlist'] });
+  assert.equal((await f.control.settings(OTHER)).command_spam_allowlist, '');
+  assert.deepEqual(await f.control.rules(GROUP), []);
+  assert.deepEqual(analyzeMessage({ text: '/get_x https://unapproved.example' }, await f.control.rules(GROUP)).reasons, ['link']);
+  assert.deepEqual(analyzeMessage({ text: exact, forward_origin: { type: 'hidden_user' } }, await f.control.rules(GROUP)).reasons, ['forward']);
+});
+
+test('command-spam settings require the current group admin and cannot enable punitive actions', async t => {
+  const f = await fixture(t);
+  const settings = { command_spam_enabled: false, command_spam_allowlist: '/get_*' };
+  await assert.rejects(f.mutate('configure', { settings }, { actor: actor(USER) }), code('forbidden'));
+  await assert.rejects(f.mutate('configure', { settings }, { chatId: OTHER }), code('forbidden'));
+  assert.equal((await f.control.settings(GROUP)).command_spam_enabled, true);
+  assert.equal((await f.control.settings(OTHER)).command_spam_allowlist, '');
+  await assert.rejects(f.mutate('configure', { settings: { command_spam_action: 'mute' } }), code('invalid_settings'));
+  await assert.rejects(f.mutate('configure', { settings: { command_spam_action: 'ban' } }), code('invalid_settings'));
+  await f.mutate('configure', { settings });
+  f.api.setMember(GROUP, ADMIN, 'member');
+  await assert.rejects(f.mutate('configure', { settings: { command_spam_enabled: true } }), code('forbidden'));
+  assert.equal((await f.control.settings(GROUP)).command_spam_enabled, false);
+  assert.ok(f.api.calls.every(call => ['getChatMember'].includes(call.method)));
+});
+
+test('command exceptions reject wildcard bypasses, malformed values and oversized lists atomically', async t => {
+  const f = await fixture(t);
+  const invalid = [
+    null, true, 12, [], {}, '/*', '*', '/ab*', '/foo**', '/get_.+', '/get_*@someone',
+    'https://example.com', '/get_.*', '/get_ argument', '/get_\u0000', '/foo@a_bot_2',
+    '/' + 'a'.repeat(129), '/' + 'a'.repeat(33) + '*', '/get_*@' + 'a'.repeat(30) + 'bot',
+    Array.from({ length: 21 }, (_, i) => `/command_${i}`).join('\n'), ' '.repeat(2001),
+  ];
+  for (const value of invalid) {
+    await assert.rejects(f.mutate('configure', { settings: { command_spam_enabled: false, command_spam_allowlist: value } }), code('invalid_settings'));
+  }
+  await assert.rejects(f.mutate('configure', { settings: { command_spam_enabled: 0 } }), code('invalid_settings'));
+  assert.equal((await f.control.settings(GROUP)).command_spam_enabled, true);
+  assert.equal((await f.control.settings(GROUP)).command_spam_allowlist, '');
+  assert.equal((await f.control.all('SELECT * FROM pilot_audit')).length, 0);
+  const saved = await f.mutate('configure', { settings: { command_spam_allowlist: '  \n\r\n' } });
+  assert.equal(saved.settings.command_spam_allowlist, '');
 });
 
 test('admin queries freshly authorize before titles and only list currently authorized known groups', async t => {
