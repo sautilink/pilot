@@ -91,15 +91,18 @@ async function fixture(t, { bound = true } = {}) {
   };
 }
 
-test('only the permanently bound owner receives a private home broadcast button; global menus never contain it', async t => {
+test('only the permanently bound owner receives private owner tools; global menus never contain them', async t => {
   const f = await fixture(t);
   await f.command(privateMessage('/start'));
   assert.ok(f.lastReply().reply_markup.inline_keyboard.flat().some(button => button.callback_data === 'pilot:bc:panel'));
+  assert.match(f.lastReply().text, /\/performance/);
+  assert.ok(f.lastReply().reply_markup.inline_keyboard.flat().some(button => button.url === 'https://t.me/sautilinkpilotbot?start=performance'));
   await f.command(privateMessage('/start', OTHER, { from: from(OTHER, { username: 'drcharlestz' }) }));
   assert.ok(f.lastReply().reply_markup.inline_keyboard.flat().every(button => !button.callback_data?.startsWith('pilot:bc:')));
+  assert.doesNotMatch(JSON.stringify(f.lastReply()), /performance/);
   await f.command(privateMessage('/start', OWNER, { from: from(OWNER, { username: 'renamed_owner' }) }));
   assert.ok(f.lastReply().reply_markup.inline_keyboard.flat().some(button => button.callback_data === 'pilot:bc:panel'));
-  for (const language of ['sw', 'en']) for (const commands of [getPublicCommands(language), getGroupCommands(language), getAdminCommands(language)]) assert.ok(commands.every(item => !['updates', 'broadcast', 'claimowner'].includes(item.command)));
+  for (const language of ['sw', 'en']) for (const commands of [getPublicCommands(language), getGroupCommands(language), getAdminCommands(language)]) assert.ok(commands.every(item => !['updates', 'broadcast', 'claimowner', 'performance'].includes(item.command)));
   assert.equal(f.requests.length, 0);
 });
 

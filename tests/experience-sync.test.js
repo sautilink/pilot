@@ -46,7 +46,7 @@ test('sync registers bilingual profile metadata and correctly scoped menus witho
   assert.equal(webhook.drop_pending_updates, false);
   assert.equal(webhook.secret_token, createHmac('sha256', TOKEN).update('sautilink-pilot:telegram-webhook:v1').digest('hex'));
 
-  const adminOnly = new Set(['status', 'strikes', 'forgive', 'unban', 'pause', 'resume', 'testnotice']);
+  const adminOnly = new Set(['status', 'strikes', 'forgive', 'unban', 'pause', 'resume', 'testnotice', 'doctor', 'policytest']);
   const menus = f.calls.filter(call => call.method === 'setMyCommands');
   assert.equal(menus.length, 12);
   for (const language of ['', 'sw', 'en']) {
@@ -55,6 +55,8 @@ test('sync registers bilingual profile metadata and correctly scoped menus witho
     for (const { params } of localized) {
       const names = params.commands.map(command => command.command);
       assert.equal(new Set(names).size, names.length, 'scope menus must not duplicate a command');
+      assert.ok(!names.includes('performance'), 'owner tools do not belong in shared command scopes');
+      assert.ok(names.includes('support')); assert.ok(names.includes('communities'));
       if (params.scope.type === 'all_chat_administrators') {
         for (const name of adminOnly) assert.ok(names.includes(name));
       } else {
@@ -235,7 +237,7 @@ test('the confirmed legacy subscription remains valid across profile revisions w
   await f.store.settings({ experience_version: EXPERIENCE_VERSION, experience_webhook_version: '2026-10-22.4' });
   assert.equal((await f.sync()).status, 'current');
   assert.equal(f.calls.length, 0);
-  await f.store.settings({ experience_version: '2026-10-22.3' });
+  await f.store.settings({ experience_version: '2026-10-22.4' });
   assert.equal((await f.sync()).status, 'pending');
   assert.equal(f.calls.filter(call => call.method === 'setWebhook').length, 0);
   assert.equal(await f.store.setting('experience_webhook_version'), WEBHOOK_VERSION);

@@ -1,4 +1,6 @@
 import { createOperationsStore } from './operations-store.js';
+import { createEventExtensions } from './event-service.js';
+import { validEventTimezone } from './event-calendar.js';
 
 export class OperationsError extends Error {
   constructor(code, status = 400) {
@@ -8,8 +10,8 @@ export class OperationsError extends Error {
 
 const DAY = 86400, LEASE = 120, MAX_SCHEDULES = 20, MAX_EVENTS = 50, MAX_HIGHLIGHTS = 50;
 const ID = /^[a-f0-9]{24}$/;
-export const OPERATIONS_READS = new Set(['operations','events']);
-export const OPERATIONS_ACTIONS = new Set(['schedule_create','schedule_update','schedule_cancel','event_create','event_update','event_cancel','event_rsvp','highlight_add','highlight_remove','highlight_schedule']);
+export const OPERATIONS_READS = new Set(['operations','events','event_calendar']);
+export const OPERATIONS_ACTIONS = new Set(['schedule_create','schedule_update','schedule_cancel','event_create','event_update','event_cancel','event_rsvp','event_reminders','event_settings','highlight_add','highlight_remove','highlight_schedule']);
 const fail = (code, status = 400) => { throw new OperationsError(code, status); };
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 const admin = value => ['creator','administrator'].includes(value?.status);
@@ -74,6 +76,7 @@ export function createOperationsService({ db, api, clock = () => Math.floor(Date
     if (!(membership ? member(current) : admin(current))) fail('forbidden', 403);
     return current;
   }
+  const eventTools = createEventExtensions({ db, api, clock: now, fail, authorize });
   function scheduleView(row) {
     return { id:row.id,kind:row.kind,text:row.text,language:row.language,repeat:row.repeat,run_at:row.run_at,
       next_attempt_at:row.next_attempt_at,expires_at:row.expires_at,status:row.status,sent_count:row.sent_count,
@@ -81,28 +84,37 @@ export function createOperationsService({ db, api, clock = () => Math.floor(Date
   }
   async function events(chat, user) {
     const rows = await store.all(`SELECT e.*,
-      SUM(CASE WHEN r.response='going' THEN 1 ELSE 0 END) AS going_count,
+      SUM(CASE WHEN r.response='going' AND COALESCE(a.state,'going')!='waitlisted' THEN 1 ELSE 0 END) AS going_count,
       SUM(CASE WHEN r.response='maybe' THEN 1 ELSE 0 END) AS maybe_count,
       SUM(CASE WHEN r.response='declined' THEN 1 ELSE 0 END) AS declined_count,
-      MAX(CASE WHEN r.user_id=? THEN r.response ELSE NULL END) AS own_response
+      SUM(CASE WHEN a.state='waitlisted' THEN 1 ELSE 0 END) AS waitlisted_count,
+      MAX(CASE WHEN r.user_id=? THEN CASE WHEN a.state='waitlisted' THEN 'waitlisted' ELSE r.response END ELSE NULL END) AS own_response,
+      o.capacity,COALESCE(o.revision,1) AS revision,
+      COALESCE(s.enabled,0) AS reminders_enabled,COALESCE(s.lead_minutes,60) AS reminder_lead
       FROM pilot_events e LEFT JOIN pilot_event_rsvps r ON r.event_id=e.id
-      WHERE e.chat_id=? AND e.ends_at>=? GROUP BY e.id ORDER BY CASE WHEN e.status='active' THEN 0 ELSE 1 END,e.starts_at,e.id LIMIT 50`,user,chat,now()-DAY);
+      LEFT JOIN pilot_event_attendance a ON a.event_id=r.event_id AND a.user_id=r.user_id
+      LEFT JOIN pilot_event_options o ON o.event_id=e.id
+      LEFT JOIN pilot_event_subscriptions s ON s.event_id=e.id AND s.user_id=?
+      WHERE e.chat_id=? AND e.ends_at>=? GROUP BY e.id ORDER BY CASE WHEN e.status='active' THEN 0 ELSE 1 END,e.starts_at,e.id LIMIT 50`,user,user,chat,now()-DAY);
     return rows.map(row=>({ id:row.id,title:row.title,description:row.description,url:row.url,language:row.language,starts_at:row.starts_at,ends_at:row.ends_at,status:row.status,
-      counts:{going:Number(row.going_count),maybe:Number(row.maybe_count),declined:Number(row.declined_count)},response:row.own_response || null }));
+      counts:{going:Number(row.going_count),maybe:Number(row.maybe_count),declined:Number(row.declined_count)},response:row.own_response || null,
+      capacity:row.capacity,waiting:Number(row.waitlisted_count),revision:Number(row.revision),reminders:{enabled:!!row.reminders_enabled,leadMinutes:Number(row.reminder_lead)} }));
   }
   async function query({ actor, chatId, view, input = {} }) {
     const {user,chat} = scope(actor,chatId);
     if (!OPERATIONS_READS.has(view)) fail('invalid_view');
-    keys(input,[]);
-    await authorize(user,chat,view === 'events');
+    keys(input,view === 'event_calendar' ? ['id'] : []);
+    await authorize(user,chat,view !== 'operations');
     await store.ensure();
+    if(view === 'event_calendar') return eventTools.calendar(chat,id(input.id));
     const eventRows = await events(chat,user);
-    if (view === 'events') return { events:eventRows, timezone:'Africa/Dar_es_Salaam' };
+    const timezone = await eventTools.timezone(chat);
+    if (view === 'events') return { events:eventRows, timezone };
     const schedules = (await store.all('SELECT * FROM pilot_schedules WHERE chat_id=? ORDER BY created_at DESC,id DESC LIMIT 50',chat)).map(scheduleView);
     const deliveries = await store.all('SELECT d.schedule_id,d.run_at,d.status,d.message_id,d.error_kind,d.updated_at FROM pilot_schedule_deliveries d JOIN pilot_schedules s ON s.id=d.schedule_id WHERE s.chat_id=? ORDER BY d.updated_at DESC,d.run_at DESC LIMIT 50',chat);
     const highlights = await store.all('SELECT id,text,url,created_at,sent_at,creator_id FROM pilot_highlights WHERE chat_id=? AND created_at>=? ORDER BY created_at DESC,id DESC LIMIT 50',chat,now()-30*DAY);
     const audit = await store.all('SELECT actor_id,action,target_id,created_at FROM pilot_operations_audit WHERE chat_id=? ORDER BY created_at DESC,id DESC LIMIT 30',chat);
-    return { schedules,events:eventRows,highlights,deliveries,audit,timezone:'Africa/Dar_es_Salaam',limits:{schedules:MAX_SCHEDULES,events:MAX_EVENTS,highlights:MAX_HIGHLIGHTS,recurrenceDays:90} };
+    return { schedules,events:eventRows,highlights,deliveries,audit,timezone,eventDeliveries:await eventTools.summary(chat),limits:{schedules:MAX_SCHEDULES,events:MAX_EVENTS,highlights:MAX_HIGHLIGHTS,recurrenceDays:90,...eventTools.limits} };
   }
 
   function normalize(action,input,current) {
@@ -114,17 +126,30 @@ export function createOperationsService({ db, api, clock = () => Math.floor(Date
     }
     if (['schedule_cancel','event_cancel','highlight_remove'].includes(action)) { keys(input,['id']); return {id:id(input.id)}; }
     if (action === 'event_create' || action === 'event_update') {
-      keys(input,['id','title','description','startsAt','endsAt','url','language']);
+      keys(input,['id','title','description','startsAt','endsAt','url','language','capacity']);
       if (action === 'event_create' && input.id !== undefined) fail('invalid_input');
       const startsAt = timestamp(input.startsAt,current);
       const endsAt = input.endsAt ?? startsAt + 3600;
       if (!Number.isSafeInteger(endsAt) || endsAt <= startsAt || endsAt > startsAt + 7 * DAY) fail('invalid_time');
-      return { ...(action === 'event_update' ? {id:id(input.id)} : {}),title:text(input.title,160),description:text(input.description ?? '',1500,true),startsAt,endsAt,url:url(input.url),language:language(input.language) };
+      if(input.capacity !== undefined && input.capacity !== null && (!Number.isSafeInteger(input.capacity) || input.capacity < 1 || input.capacity > 2000)) fail('invalid_capacity');
+      return { ...(action === 'event_update' ? {id:id(input.id)} : {}),title:text(input.title,160),description:text(input.description ?? '',1500,true),startsAt,endsAt,url:url(input.url),language:language(input.language),...(input.capacity === undefined ? {} : {capacity:input.capacity}) };
     }
     if (action === 'event_rsvp') {
       keys(input,['id','response']);
       if (!['going','maybe','declined'].includes(input.response)) fail('invalid_response');
       return {id:id(input.id),response:input.response};
+    }
+    if(action === 'event_settings') {
+      keys(input,['timezone']);let timezone;
+      try { timezone=validEventTimezone(input.timezone); } catch { fail('invalid_timezone'); }
+      return {timezone};
+    }
+    if(action === 'event_reminders') {
+      keys(input,['id','enabled','leadMinutes','language']);
+      if(typeof input.enabled !== 'boolean') fail('invalid_input');
+      const leadMinutes=input.leadMinutes??60;
+      if(![5,15,30,60,1440].includes(leadMinutes)) fail('invalid_reminder');
+      return {id:id(input.id),enabled:input.enabled,leadMinutes,...(input.language===undefined?{}:{language:language(input.language)})};
     }
     if (action === 'highlight_add') { keys(input,['text','url']); return {text:text(input.text,600),url:url(input.url)}; }
     if (action === 'highlight_schedule') {
@@ -142,7 +167,7 @@ export function createOperationsService({ db, api, clock = () => Math.floor(Date
     const {user,chat} = scope(actor,chatId);
     if (!OPERATIONS_ACTIONS.has(action)) fail('invalid_action');
     if (typeof requestId !== 'string' || !/^[a-zA-Z0-9_:-]{16,160}$/.test(requestId)) fail('invalid_request_id');
-    await authorize(user,chat,action === 'event_rsvp');
+    await authorize(user,chat,['event_rsvp','event_reminders'].includes(action));
     await store.ensure();
     // Replays are checked before time validation so a legitimate retry tomorrow
     // can still recover the result of today's schedule without making a new send.
@@ -154,7 +179,7 @@ export function createOperationsService({ db, api, clock = () => Math.floor(Date
     }
     const current = now(), value = normalize(action,input,current);
     const recent = await store.first('SELECT COUNT(*) AS total FROM pilot_operations_requests WHERE chat_id=? AND actor_id=? AND created_at>?',chat,user,current-3600);
-    if (Number(recent.total) >= (action==='event_rsvp'?60:120)) fail('rate_limited',429);
+    if (Number(recent.total) >= (['event_rsvp','event_reminders'].includes(action)?60:120)) fail('rate_limited',429);
     const key = (await hash({requestId,chat,user,action})).slice(0,24);
     const target = value.id || key;
     const statements = [];
@@ -195,23 +220,9 @@ export function createOperationsService({ db, api, clock = () => Math.floor(Date
       await requireRow('pilot_schedules',['pending','paused','unknown']);
       statements.push(db.prepare("UPDATE pilot_schedules SET status='cancelled',lease_token=NULL,claimed_at=NULL,error_kind='admin_cancelled',updated_at=? WHERE id=? AND chat_id=?").bind(current,value.id,chat));
       result.status='cancelled';
-    } else if (action === 'event_create') {
-      await quota("SELECT COUNT(*) AS total FROM pilot_events WHERE chat_id=? AND status='active' AND ends_at>=?",MAX_EVENTS);
-      statements.push(db.prepare("INSERT INTO pilot_events(id,chat_id,creator_id,title,description,url,language,starts_at,ends_at,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,'active',?,?)").bind(key,chat,user,value.title,value.description,value.url,value.language,value.startsAt,value.endsAt,current,current));
-      result.status='active';
-    } else if (action === 'event_update') {
-      await requireRow('pilot_events',['active']);
-      statements.push(db.prepare('UPDATE pilot_events SET title=?,description=?,url=?,language=?,starts_at=?,ends_at=?,updated_at=? WHERE id=? AND chat_id=?').bind(value.title,value.description,value.url,value.language,value.startsAt,value.endsAt,current,value.id,chat));
-      result.status='active';
-    } else if (action === 'event_cancel') {
-      await requireRow('pilot_events',['active']);
-      statements.push(db.prepare("UPDATE pilot_events SET status='cancelled',updated_at=? WHERE id=? AND chat_id=?").bind(current,value.id,chat));
-      result.status='cancelled';
-    } else if (action === 'event_rsvp') {
-      const row = await requireRow('pilot_events',['active']);
-      if (row.ends_at <= current) fail('event_ended',409);
-      statements.push(db.prepare('INSERT INTO pilot_event_rsvps(event_id,user_id,response,updated_at) VALUES(?,?,?,?) ON CONFLICT(event_id,user_id) DO UPDATE SET response=excluded.response,updated_at=excluded.updated_at').bind(value.id,user,value.response,current));
-      result.response=value.response;
+    } else if (action.startsWith('event_')) {
+      const prepared = await eventTools.prepare({action,value,user,chat,key,current});
+      statements.push(...prepared.statements);result={...result,...prepared.result};
     } else if (action === 'highlight_add') {
       await quota('SELECT COUNT(*) AS total FROM pilot_highlights WHERE chat_id=? AND created_at>=?-2592000',MAX_HIGHLIGHTS);
       statements.push(db.prepare('INSERT INTO pilot_highlights(id,chat_id,creator_id,text,url,created_at) VALUES(?,?,?,?,?,?)').bind(key,chat,user,value.text,value.url,current));
@@ -221,7 +232,7 @@ export function createOperationsService({ db, api, clock = () => Math.floor(Date
     }
     statements.push(db.prepare('INSERT INTO pilot_operations_requests(request_id,chat_id,actor_id,action,input_hash,result_json,created_at) VALUES(?,?,?,?,?,?,?)').bind(requestId,chat,user,action,rawHash,JSON.stringify(result),current));
     // RSVP identities are kept only in the RSVP table, never in admin activity.
-    if (action !== 'event_rsvp') statements.push(db.prepare('INSERT INTO pilot_operations_audit(id,chat_id,actor_id,action,target_id,created_at) VALUES(?,?,?,?,?,?)').bind(key,chat,user,action,target,current));
+    if (!['event_rsvp','event_reminders'].includes(action)) statements.push(db.prepare('INSERT INTO pilot_operations_audit(id,chat_id,actor_id,action,target_id,created_at) VALUES(?,?,?,?,?,?)').bind(key,chat,user,action,target,current));
     try { await db.batch(statements); }
     catch (error) {
       const replay = await store.first('SELECT * FROM pilot_operations_requests WHERE request_id=? AND chat_id=? AND actor_id=?',requestId,chat,user);
@@ -245,27 +256,41 @@ export function createOperationsService({ db, api, clock = () => Math.floor(Date
     await store.ensure();
     const chat = String(chatId);
     const row = await store.first("SELECT MIN(CASE WHEN status IN ('checking','sending') THEN COALESCE(claimed_at,updated_at)+? ELSE MAX(run_at,next_attempt_at) END) AS due FROM pilot_schedules WHERE chat_id=? AND status IN ('pending','checking','sending')",LEASE,chat);
-    if (row?.due == null) return null;
+    const eventDue = await eventTools.nextRunAt(chat);
+    const due = [row?.due,eventDue].filter(value=>value!=null).map(Number);
+    if (!due.length) return null;
     const runtime = await store.first('SELECT next_send_at FROM pilot_operations_runtime WHERE chat_id=?',chat);
-    return Math.max(Number(row.due),Number(runtime?.next_send_at || 0));
+    return Math.max(Math.min(...due),Number(runtime?.next_send_at || 0));
   }
   async function nextDueGroups({limit = 50} = {}) {
     await store.ensure();
     const bounded = Math.min(100,Math.max(1,Math.floor(limit) || 50));
-    return (await store.all("SELECT chat_id,MIN(CASE WHEN status IN ('checking','sending') THEN COALESCE(claimed_at,updated_at)+? ELSE MAX(run_at,next_attempt_at) END) AS due FROM pilot_schedules WHERE status IN ('pending','checking','sending') GROUP BY chat_id HAVING due<=? ORDER BY due,chat_id LIMIT ?",LEASE,now()+600,bounded)).map(row=>row.chat_id);
+    const schedules=await store.all("SELECT chat_id,MIN(CASE WHEN status IN ('checking','sending') THEN COALESCE(claimed_at,updated_at)+? ELSE MAX(run_at,next_attempt_at) END) AS due FROM pilot_schedules WHERE status IN ('pending','checking','sending') GROUP BY chat_id HAVING due<=? ORDER BY due,chat_id LIMIT ?",LEASE,now()+600,bounded);
+    const eventGroups=await eventTools.nextDueGroups(bounded),due=new Map();
+    for(const row of [...schedules,...eventGroups])due.set(row.chat_id,Math.min(due.get(row.chat_id)??Infinity,Number(row.due)));
+    return [...due].sort((a,b)=>a[1]-b[1]||a[0].localeCompare(b[0])).slice(0,bounded).map(([chat])=>chat);
   }
-  async function drain(chatId,{limit = 1} = {}) {
+  async function drain(chatId,{limit = 1,shouldYield = () => false} = {}) {
     if (!validChat(chatId)) fail('invalid_chat');
     const chat = String(chatId);
     await store.ensure();
     await recover(chat);
     const results = [];
     for (let index=0;index<Math.min(3,Math.max(1,Math.floor(limit) || 1));index++) {
+      if (shouldYield()) break;
       const current = now();
       const runtime = await store.first('SELECT next_send_at FROM pilot_operations_runtime WHERE chat_id=?',chat);
       if (Number(runtime?.next_send_at || 0)>current) break;
-      const row = await store.first("SELECT * FROM pilot_schedules WHERE chat_id=? AND status='pending' AND run_at<=? AND next_attempt_at<=? AND expires_at>=? ORDER BY run_at,id LIMIT 1",chat,current,current,current);
+      const row = await store.first("SELECT * FROM pilot_schedules WHERE chat_id=? AND status='pending' AND run_at<=? AND next_attempt_at<=? AND expires_at>=? ORDER BY MAX(run_at,next_attempt_at),run_at,id LIMIT 1",chat,current,current,current);
+      const eventDue = await eventTools.nextRunAt(chat);
+      // Share one optional-work budget and choose the earlier due item. A slow
+      // schedule cannot spend a second job on reminders or starve an older one.
+      if (eventDue != null && eventDue <= current && (!row || eventDue <= Math.max(row.run_at,row.next_attempt_at))) {
+        results.push(...await eventTools.drain(chat,{limit:1,shouldYield}));
+        continue;
+      }
       if (!row) break;
+      if (shouldYield()) break;
       const lease = crypto.randomUUID();
       if (!changes(await store.run("UPDATE pilot_schedules SET status='checking',lease_token=?,claimed_at=?,updated_at=? WHERE id=? AND status='pending' AND run_at=?",lease,current,current,row.id,row.run_at))) continue;
       const stop = async (status,errorKind,nextAttempt = null) => {
@@ -314,6 +339,7 @@ export function createOperationsService({ db, api, clock = () => Math.floor(Date
         await db.batch(completion('skipped',null,'no_highlights'));
         results.push({id:row.id,status:'skipped',error_kind:'no_highlights'}); continue;
       }
+      if (shouldYield()) { await stop('pending',null,row.next_attempt_at); break; }
       const sending = await db.batch([
         db.prepare("UPDATE pilot_schedules SET status='sending',claimed_at=?,attempts=attempts+1,updated_at=? WHERE id=? AND lease_token=? AND status='checking'").bind(now(),now(),row.id,lease),
         db.prepare("INSERT INTO pilot_schedule_deliveries(schedule_id,run_at,status,highlight_ids,updated_at) SELECT ?,?,'sending',?,? WHERE EXISTS(SELECT 1 FROM pilot_schedules WHERE id=? AND lease_token=? AND status='sending') ON CONFLICT(schedule_id,run_at) DO UPDATE SET status='sending',highlight_ids=excluded.highlight_ids,updated_at=excluded.updated_at WHERE pilot_schedule_deliveries.status IN ('failed','checking')").bind(row.id,row.run_at,JSON.stringify(highlightIds),now(),row.id,lease),

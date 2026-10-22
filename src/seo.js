@@ -1,5 +1,5 @@
 export const SEO_ORIGIN = 'https://pilot.sautilink.com';
-export const PUBLIC_SEO_PAGES = Object.freeze(['/', '/privacy', '/updates', '/roadmap', '/developers']);
+export const PUBLIC_SEO_PAGES = Object.freeze(['/', '/privacy', '/updates', '/roadmap', '/developers', '/communities']);
 
 const LOGO_URL = 'https://sautilink.com/logo.png';
 const ORGANIZATION_ID = 'https://www.sautilink.com/#organization';
@@ -69,12 +69,16 @@ function structuredData({ title, description, path, lang, url }) {
         'Ban ya saa 24, siku 7 na permanent kwa makosa yanayojirudia',
         'Kufuta spam ya commands bila ban, mute wala kosa',
         'Paneli ya admin na rufaa za wanachama',
+        'Events, vikumbusho vya hiari na msaada wa faragha wa group',
+        'Orodha ya jumuiya zilizochagua kuorodheshwa',
       ] : [
         'Unapproved link and forwarded-message moderation',
         'Admin and linked-channel exemptions',
         '24-hour, 7-day and permanent bans for repeat offenses',
         'Command spam deletion without a ban, mute or strike',
         'Admin dashboard and member appeals',
+        'Group events, optional reminders and private group support',
+        'Community directory with explicit listing choices',
       ],
     });
   }

@@ -13,7 +13,7 @@ import {seoDiscoveryResponse} from './seo-discovery.js';
 import {renderToolsPage} from './tools-page.js';
 import {handleToolsApi,handleIntegrationApi} from './tools-api.js';
 import {createCommunityService} from './community-service.js';
-import {renderCommunityHub} from './community-pages.js';
+import {renderCommunityHub,renderCommunityDiscovery} from './community-pages.js';
 import {renderReleasePage} from './release-pages.js';
 import {createRequestTiming,instrumentDatabase} from './request-timing.js';
 
@@ -151,6 +151,12 @@ export async function handleFetch(request,env,ctx) {
     if(readPage && path==='/app') return appHtml(renderDashboard({lang}),{head});
     if(readPage && path==='/tools') return appHtml(renderToolsPage({lang}),{head});
     if(readPage && ['/updates','/roadmap','/developers'].includes(path)) return html(renderReleasePage(path,{lang}),{head});
+    if(readPage && path==='/communities') {
+      if(!env.DB)return error('Service unavailable',503);
+      const result=await createCommunityService({db:env.DB}).discover({query:url.searchParams.get('q')||'',category:url.searchParams.get('category')||'',language:url.searchParams.get('language')||'',page:Number(url.searchParams.get('page')||1)});
+      const filtered=['q','category','language','page'].some(key=>url.searchParams.has(key));
+      return html(renderCommunityDiscovery(result,{lang}),{head,indexable:!filtered});
+    }
     if(readPage && /^\/community\/[a-z0-9][a-z0-9-]{2,46}[a-z0-9]$/.test(path)) {
       if(!env.DB)return error('Haijapatikana.',404);
       const hub=await createCommunityService({db:env.DB}).getPublicHub(path.slice('/community/'.length),{language:lang});

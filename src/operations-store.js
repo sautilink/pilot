@@ -1,4 +1,5 @@
 import { ensureSchemaFamily } from './schema-ready.js';
+import { createEventStore } from './event-store.js';
 
 export const OPERATIONS_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS pilot_schedules (
   id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, creator_id TEXT NOT NULL,
@@ -57,7 +58,8 @@ export function createOperationsStore(db) {
   const first = (sql, ...values) => db.prepare(sql).bind(...values).first();
   const all = async (sql, ...values) => (await db.prepare(sql).bind(...values).all()).results || [];
   const run = (sql, ...values) => db.prepare(sql).bind(...values).run();
-  const ensure = () => ensureSchemaFamily(db, 'operations', OPERATIONS_SCHEMA_SQL, '1');
+  const events = createEventStore(db);
+  const ensure = async () => { await ensureSchemaFamily(db, 'operations', OPERATIONS_SCHEMA_SQL, '1'); await events.ensure(); };
   return {
     first, all, run, ensure,
     async cleanup(now = Math.floor(Date.now() / 1000)) {
@@ -70,6 +72,7 @@ export function createOperationsStore(db) {
         db.prepare('DELETE FROM pilot_highlights WHERE id IN (SELECT id FROM pilot_highlights WHERE created_at<? LIMIT 200)').bind(since),
         db.prepare('DELETE FROM pilot_operations_requests WHERE (request_id,chat_id,actor_id) IN (SELECT request_id,chat_id,actor_id FROM pilot_operations_requests WHERE created_at<? LIMIT 500)').bind(since),
         db.prepare('DELETE FROM pilot_operations_audit WHERE id IN (SELECT id FROM pilot_operations_audit WHERE created_at<? LIMIT 500)').bind(since),
+        db.prepare("DELETE FROM pilot_event_notifications WHERE id IN (SELECT id FROM pilot_event_notifications WHERE status IN ('sent','failed','unknown','skipped') AND updated_at<? LIMIT 500)").bind(since),
         db.prepare('DELETE FROM pilot_operations_runtime WHERE next_send_at<? AND chat_id NOT IN (SELECT chat_id FROM pilot_schedules)').bind(since),
       ]);
     },

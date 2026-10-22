@@ -2,16 +2,17 @@ import { validateMiniAppInitData } from './miniapp-auth.js';
 import { createControlService } from './control-service.js';
 import { createTelegram } from './telegram.js';
 import { createCommunityService, COMMUNITY_READS, COMMUNITY_ACTIONS } from './community-service.js';
-import { createOperationsService } from './operations-service.js';
+import { createOperationsService, OPERATIONS_READS, OPERATIONS_ACTIONS } from './operations-service.js';
 import { createGovernanceService, GOVERNANCE_VIEWS, GOVERNANCE_ACTIONS } from './governance-service.js';
 import { createIntegrationService } from './integration-service.js';
 import { fail, objectKeys, validChat } from './tools-store.js';
 import { createOwnerAuth } from './owner-auth.js';
+import { createCareService, CARE_READS, CARE_ACTIONS } from './care-service.js';
 
-const OP_READS=new Set(['operations','events']);
-const OP_ACTIONS=new Set(['schedule_create','schedule_update','schedule_cancel','event_create','event_update','event_cancel','event_rsvp','highlight_add','highlight_remove','highlight_schedule']);
-const NO_CHAT_READS=new Set(['groups','feedback']);
-const NO_CHAT_ACTIONS=new Set(['feedback_create','feedback_resolve']);
+const OP_READS=OPERATIONS_READS;
+const OP_ACTIONS=OPERATIONS_ACTIONS;
+const NO_CHAT_READS=new Set(['groups','feedback','performance']);
+const NO_CHAT_ACTIONS=new Set(['feedback_create','feedback_resolve','performance_settings']);
 const HEADERS={'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Robots-Tag':'noindex, nofollow'};
 const result=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:HEADERS});
 function failure(error){const code=typeof error?.code==='string'&&/^[A-Za-z_]{2,64}$/.test(error.code)?error.code:'unavailable';const status=Number.isInteger(error?.status)&&error.status>=400&&error.status<=599?error.status:503;return result({ok:false,error:code},status);}
@@ -30,10 +31,10 @@ function checkRequest(request,env,{integration=false}={}){
   if(!env.DB||!env.BOT_TOKEN||!env.GROUPS&&!integration)fail('unavailable',503);
 }
 export function createToolServices({db,api,clock,owner}){
-  const community=createCommunityService({db,api,clock,owner}),operations=createOperationsService({db,api,clock}),governance=createGovernanceService({db,api,clock});
-  return {community,operations,governance,integration:createIntegrationService({db,api,community,operations,clock}),
-    async query(payload){if(COMMUNITY_READS.has(payload.view))return community.query(payload);if(OP_READS.has(payload.view))return operations.query(payload);if(GOVERNANCE_VIEWS.has(payload.view))return governance.query(payload);fail('invalid_view');},
-    async perform(payload){if(COMMUNITY_ACTIONS.has(payload.action))return community.perform(payload);if(OP_ACTIONS.has(payload.action))return operations.perform(payload);if(GOVERNANCE_ACTIONS.has(payload.action))return governance.perform(payload);fail('invalid_action');}};
+  const community=createCommunityService({db,api,clock,owner}),operations=createOperationsService({db,api,clock}),governance=createGovernanceService({db,api,clock}),care=createCareService({db,api,clock,owner});
+  return {community,operations,governance,care,integration:createIntegrationService({db,api,community,operations,clock}),
+    async query(payload){if(COMMUNITY_READS.has(payload.view))return community.query(payload);if(OP_READS.has(payload.view))return operations.query(payload);if(GOVERNANCE_VIEWS.has(payload.view))return governance.query(payload);if(CARE_READS.has(payload.view))return care.query(payload);fail('invalid_view');},
+    async perform(payload){if(COMMUNITY_ACTIONS.has(payload.action))return community.perform(payload);if(OP_ACTIONS.has(payload.action))return operations.perform(payload);if(GOVERNANCE_ACTIONS.has(payload.action))return governance.perform(payload);if(CARE_ACTIONS.has(payload.action))return care.perform(payload);fail('invalid_action');}};
 }
 export async function handleToolsApi(request,env,{api,clock=()=>Math.floor(Date.now()/1000)}={}){
   try{
@@ -44,7 +45,7 @@ export async function handleToolsApi(request,env,{api,clock=()=>Math.floor(Date.
     if((body.view===undefined)===(body.action===undefined))fail('invalid_request');
     const input=body.input??{};if(!input||typeof input!=='object'||Array.isArray(input))fail('invalid_request');
     const chatId=body.chatId==null?undefined:validChat(body.chatId),telegram=api||createTelegram(env.BOT_TOKEN);
-    if(chatId&&(NO_CHAT_ACTIONS.has(body.action)||body.view==='feedback'))fail('invalid_chat');
+    if(chatId&&(NO_CHAT_ACTIONS.has(body.action)||['feedback','performance'].includes(body.view)))fail('invalid_chat');
     if(body.view!==undefined){
       if(!NO_CHAT_READS.has(body.view)&&!chatId)fail('invalid_chat');
       const data=body.view==='groups'?await createControlService({db:env.DB,api:telegram,clock}).query({actor,view:'groups',input}):await createToolServices({db:env.DB,api:telegram,clock}).query({actor,chatId,view:body.view,input});
@@ -52,9 +53,9 @@ export async function handleToolsApi(request,env,{api,clock=()=>Math.floor(Date.
       return result({ok:true,data});
     }
     if(!NO_CHAT_ACTIONS.has(body.action)&&!chatId)fail('invalid_chat');
-    if(!COMMUNITY_ACTIONS.has(body.action)&&!OP_ACTIONS.has(body.action)&&!GOVERNANCE_ACTIONS.has(body.action))fail('invalid_action');
+    if(!COMMUNITY_ACTIONS.has(body.action)&&!OP_ACTIONS.has(body.action)&&!GOVERNANCE_ACTIONS.has(body.action)&&!CARE_ACTIONS.has(body.action))fail('invalid_action');
     if(typeof body.requestId!=='string'||!/^[A-Za-z0-9_-]{16,80}$/.test(body.requestId))fail('invalid_request_id');
-    const name=NO_CHAT_ACTIONS.has(body.action)?'__pilot_feedback__':chatId;
+    const name=body.action==='performance_settings'?'__pilot_performance__':NO_CHAT_ACTIONS.has(body.action)?'__pilot_feedback__':chatId;
     const response=await env.GROUPS.get(env.GROUPS.idFromName(name)).fetch('https://group.internal/tools',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({actor,chatId,action:body.action,input,requestId:body.requestId})});
     const data=await response.json();if(!response.ok||data?.ok===false)throw {code:data.error,status:response.status};return result({ok:true,data});
   }catch(error){return failure(error);}

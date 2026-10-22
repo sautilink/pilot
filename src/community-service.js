@@ -1,6 +1,9 @@
 import { createCommunityStore } from './community-store.js';
 import { createControlStore } from './control-store.js';
 import { createOwnerAuth } from './owner-auth.js';
+import { createSupportService, SUPPORT_READS, SUPPORT_ACTIONS } from './support-service.js';
+import { createDiscoveryStore, discoverCommunities, DISCOVERY_CATEGORIES } from './discovery-service.js';
+import { createBroadcastStore } from './broadcast-store.js';
 
 export class CommunityError extends Error {
   constructor(code, status = 400) { super(code); this.name = 'CommunityError'; this.code = code; this.status = status; }
@@ -39,8 +42,8 @@ async function hash(value) {
 }
 
 export const COMMUNITY_HUB_DEFAULTS = Object.freeze({ visibility: 'private', slug: '', title: '', description: '', rules: '', joinUrl: '', resources: [], language: 'en', showFaq: false });
-export const COMMUNITY_READS = new Set(['community', 'reports', 'faq', 'feedback']);
-export const COMMUNITY_ACTIONS = new Set(['flag_claim', 'flag_resolve', 'faq_save', 'faq_remove', 'hub_save', 'feedback_create', 'feedback_resolve']);
+export const COMMUNITY_READS = new Set(['community', 'reports', 'faq', 'feedback', ...SUPPORT_READS]);
+export const COMMUNITY_ACTIONS = new Set(['flag_claim', 'flag_resolve', 'faq_save', 'faq_remove', 'hub_save', 'feedback_create', 'feedback_resolve', 'discovery_save', ...SUPPORT_ACTIONS]);
 
 function hubView(row) {
   if (!row) return { ...COMMUNITY_HUB_DEFAULTS, resources: [] };
@@ -60,6 +63,7 @@ const reportView = row => ({
 
 export function createCommunityService({ db, api, clock = () => Math.floor(Date.now() / 1000), owner = createOwnerAuth({ db, clock }) }) {
   const store = createCommunityStore(db), control = createControlStore(db);
+  const support = createSupportService({ db, api, clock }), discovery = createDiscoveryStore(db);
   let bot;
   const identity = async () => bot ||= await api.call('getMe');
 
@@ -134,6 +138,7 @@ export function createCommunityService({ db, api, clock = () => Math.floor(Date.
   }
   async function query({ actor, chatId, view, input = {} }) {
     if (!COMMUNITY_READS.has(view)) fail('invalid_view');
+    if (SUPPORT_READS.has(view)) return support.query({ actor, chatId, view, input });
     if (view === 'feedback') {
       await authorizeOwner(actor); validKeys(input, []); await store.ensure();
       return { feedback: await store.all('SELECT id,user_id,kind,message,status,created_at,updated_at FROM pilot_feature_feedback WHERE created_at>=? ORDER BY created_at DESC,id LIMIT 100', clock() - 90 * 86400) };
@@ -143,7 +148,7 @@ export function createCommunityService({ db, api, clock = () => Math.floor(Date.
     if (view === 'faq') return faq(chat, input);
     validKeys(input, []);
     if (view === 'reports') return { reports: await reports(chat) };
-    return { reports: await reports(chat), ...(await faq(chat)), hub: hubView(await store.first('SELECT * FROM pilot_community_hubs WHERE chat_id=?', String(chat))) };
+    return { reports: await reports(chat), ...(await faq(chat)), hub: hubView(await store.first('SELECT * FROM pilot_community_hubs WHERE chat_id=?', String(chat))), discovery: await discovery.settings(chat) };
   }
 
   async function protectedTarget(chat, message) {
@@ -200,6 +205,11 @@ export function createCommunityService({ db, api, clock = () => Math.floor(Date.
       const resources = input.resources.map(resource => { validKeys(resource, ['label', 'url']); return { label: text(resource.label, 80), url: https(resource.url, { empty: false }) }; });
       return { visibility: input.visibility, slug, title: text(input.title ?? '', 100, { empty: input.visibility === 'private' }), description: text(input.description ?? '', 600, { empty: true }), rules: text(input.rules ?? '', 1500, { empty: true }), joinUrl: https(input.joinUrl, { telegram: true }), resources, language: input.language, showFaq: input.showFaq };
     }
+    if (action === 'discovery_save') {
+      validKeys(input, ['enabled', 'category']);
+      if (typeof input.enabled !== 'boolean' || !DISCOVERY_CATEGORIES.includes(input.category)) fail('invalid_discovery');
+      return { enabled: input.enabled, category: input.category };
+    }
     if (action === 'feedback_create') {
       validKeys(input, ['kind', 'message']);
       if (!['feature', 'bug'].includes(input.kind)) fail('invalid_feedback');
@@ -215,6 +225,7 @@ export function createCommunityService({ db, api, clock = () => Math.floor(Date.
 
   async function perform({ actor, chatId, action, input = {}, requestId }) {
     if (!COMMUNITY_ACTIONS.has(action)) fail('invalid_action');
+    if (SUPPORT_ACTIONS.has(action)) return support.perform({ actor, chatId, action, input, requestId });
     const data = normalize(action, input);
     let user, chat = '';
     if (action === 'feedback_create') user = actorNumber(actor);
@@ -287,8 +298,22 @@ export function createCommunityService({ db, api, clock = () => Math.floor(Date.
         }
         await store.run(`INSERT INTO pilot_community_hubs(chat_id,slug,visibility,title,description,rules,join_url,resources_json,language,show_faq,updated_by,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
           ON CONFLICT(chat_id) DO UPDATE SET slug=excluded.slug,visibility=excluded.visibility,title=excluded.title,description=excluded.description,rules=excluded.rules,join_url=excluded.join_url,resources_json=excluded.resources_json,language=excluded.language,show_faq=excluded.show_faq,updated_by=excluded.updated_by,updated_at=excluded.updated_at`, String(chat), data.slug || null, data.visibility, data.title, data.description, data.rules, data.joinUrl, JSON.stringify(data.resources), data.language, Number(data.showFaq), String(user), now);
+        if (data.visibility !== 'public') { await discovery.ensure(); await store.run('UPDATE pilot_community_discovery SET enabled=0,updated_at=? WHERE chat_id=?', now, String(chat)); }
         await audit(chat, user, action, data.slug || null, requestId);
         return { ok: true, visibility: data.visibility, url: data.visibility === 'private' ? null : `https://pilot.sautilink.com/community/${data.slug}` };
+      }
+      if (action === 'discovery_save') {
+        await discovery.ensure();
+        if (data.enabled) {
+          const hub = await store.first("SELECT slug,title,join_url FROM pilot_community_hubs WHERE chat_id=? AND visibility='public'", String(chat));
+          if (!hub?.slug || !hub.title || !hub.join_url) fail('public_hub_required', 409);
+          const me = await identity(), role = await current(chat, me.id);
+          if (!admin(role)) fail('bot_permission', 403);
+          await createBroadcastStore(db).recordMembership(chat, role.status, now);
+        }
+        await store.run('INSERT INTO pilot_community_discovery(chat_id,enabled,category,updated_by,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(chat_id) DO UPDATE SET enabled=excluded.enabled,category=excluded.category,updated_by=excluded.updated_by,updated_at=excluded.updated_at', String(chat), Number(data.enabled), data.category, String(user), now);
+        await audit(chat, user, action, null, requestId);
+        return { ok: true, enabled: data.enabled, category: data.category };
       }
       if (action === 'feedback_create') {
         if (Number((await store.first('SELECT COUNT(*) AS total FROM pilot_feature_feedback WHERE user_id=? AND created_at>=?', String(user), now - 86400)).total) >= 5) fail('feedback_rate_limited', 429);
@@ -318,5 +343,9 @@ export function createCommunityService({ db, api, clock = () => Math.floor(Date.
     return result;
   }
 
-  return { query, perform, createReportFromMessage, getPublicHub, cleanup: store.cleanup };
+  return { query, perform, createReportFromMessage, getPublicHub,
+    async discover(input = {}) { await store.ensure(); return discoverCommunities(db, input); },
+    processSupportDeliveries: support.processDeliveries, nextSupportDue: support.nextDue, dueSupportChats: support.dueChats,
+    async cleanup(now) { await store.cleanup(now); await support.cleanup(now); },
+  };
 }

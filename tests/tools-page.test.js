@@ -96,7 +96,7 @@ async function harness({ lang = 'en', view = 'overview', group = '-1001', groups
     nodes: (id = 'tools-content') => walk(document.getElementById(id)),
     field: name => walk(document.getElementById('tools-content')).find(node => node.name === name),
     form: () => walk(document.getElementById('tools-content')).find(node => node.tag === 'form'),
-    async submit() { const form = walk(document.getElementById('tools-content')).find(node => node.tag === 'form'); await form.listeners.submit({ preventDefault() {} }); await nextTurn(); },
+    async submit(fieldName) { const form = walk(document.getElementById('tools-content')).find(node => node.tag === 'form' && (!fieldName || walk(node).some(child => child.name === fieldName))); assert.ok(form, `form for ${fieldName || 'first form'} exists`); await form.listeners.submit({ preventDefault() {} }); await nextTurn(); },
     async confirm() { const nodes = walk(document.getElementById('tools-modal')); const acknowledgement = nodes.find(node => node.type === 'checkbox'); if (acknowledgement) { acknowledgement.checked = true; acknowledgement.listeners.change?.(); } const button = nodes.find(node => node.tag === 'button' && ['Confirm', 'Thibitisha'].includes(node.textContent)); await button.listeners.click(); await nextTurn(); },
   };
 }
@@ -249,4 +249,139 @@ test('active and uncertain lockdown states do not offer a second lockdown', asyn
     assert.equal(h.content().textContent.includes('Review restoring permissions now'), status === 'active');
     if (status !== 'active') assert.match(h.content().textContent, /admin review in Telegram/);
   }
+});
+
+test('setup checklist and sandbox require the server-verified admin workspace', async () => {
+  const doctor = { ready: false, checkedAt: 1792670400, group: { title: 'Verified group' }, checks: [{ id: 'restrict', status: 'needs_attention' }, { id: 'delete', status: 'ready' }] };
+  const admin = await harness({ view: 'doctor', data: { doctor } });
+  assert.deepEqual(admin.requests.map(row => row.body.view), ['groups', 'doctor']);
+  assert.equal(admin.requests[1].body.chatId, '-1001');
+  assert.match(admin.content().textContent, /Verified group/);
+  assert.match(admin.content().textContent, /enable Ban users/);
+  assert.equal(admin.requests.some(row => row.body.action), false);
+  for (const view of ['doctor', 'policy']) {
+    const member = await harness({ member: true, groups: [], view, data: { doctor } });
+    assert.equal(member.requests.some(row => ['doctor', 'policy_test'].includes(row.body.view)), false);
+    assert.doesNotMatch(member.get('tools-nav').textContent, /Setup & checks|Test group rules/);
+    assert.equal(member.field('priorStrikes'), undefined);
+  }
+});
+
+test('policy form sends a selected-group preview with explicit hypothetical settings and no action', async () => {
+  const h = await harness({ view: 'policy', data: { policy_test: { decision: 'delete_only', reasons: ['command_spam'], strike: null, durationSeconds: null } } });
+  assert.deepEqual(h.requests.map(row => row.body.view), ['groups']);
+  h.field('text').value = '/a_repeated_opaque_command_1234567890123456789012';
+  h.field('priorStrikes').value = '2'; h.field('sender').value = 'member';
+  h.field('commandMode').value = 'on'; h.field('messagesInWindow').value = '10';
+  h.field('extraLinks').value = 'https://example.org/guide';
+  await h.submit('text'); await h.flush();
+  const preview = h.requests.find(row => row.body.view === 'policy_test');
+  assert.equal(preview.body.chatId, '-1001');
+  assert.equal(preview.body.input.priorStrikes, 2); assert.equal(preview.body.input.messagesInWindow, 10);
+  assert.deepEqual(preview.body.input.proposedSettings, { command_spam_enabled: true });
+  assert.deepEqual(preview.body.input.extraRules, [{ kind: 'url', value: 'https://example.org/guide' }]);
+  assert.match(h.content().textContent, /Delete message only/);
+  assert.match(h.content().textContent, /current permissions, member status, message age/);
+  assert.equal(h.requests.some(row => row.body.action), false);
+});
+
+test('member support shows only private intake and own conversation controls', async () => {
+  const ticket = { id: 'private-ticket', number: 'P-7', subject: 'Account question', status: 'open', updated_at: 1792670400 };
+  const h = await harness({ member: true, groups: [], group: '-1009', view: 'support', data: {
+    support: { admin: false, enabled: true, contactReady: true, tickets: [ticket] },
+    support_ticket: { admin: false, enabled: true, contactReady: true, ticket, messages: [{ author_role: 'admin', created_at: 1792670400, body: '<script>private reply</script>', delivery_status: 'unknown' }] },
+  } });
+  assert.deepEqual(h.requests.map(row => row.body.view), ['groups', 'support']);
+  assert.equal(h.requests[1].body.chatId, '-1009');
+  assert.equal(h.field('enabled'), undefined);
+  assert.doesNotMatch(h.get('tools-nav').textContent, /Admin inbox|Schedule|Setup & checks|Integrations|Speed & health/);
+  assert.match(h.content().textContent, /Your tickets/);
+  h.field('subject').value = 'Help with the meeting'; h.field('body').value = 'Please explain the attendance steps.';
+  await h.submit('subject'); assert.equal(h.requests.some(row => row.body.action), false);
+  await h.confirm();
+  const created = h.requests.find(row => row.body.action === 'ticket_create');
+  assert.equal(created.body.chatId, '-1009'); assert.equal(created.body.input.subject, 'Help with the meeting');
+  await h.nodes().find(node => node.tag === 'button' && node.textContent === 'Open conversation').listeners.click(); await h.flush();
+  const detail = h.requests.find(row => row.body.view === 'support_ticket');
+  assert.deepEqual(detail.body.input, { id: 'private-ticket' }); assert.equal(detail.body.chatId, '-1009');
+  assert.match(h.content().textContent, /Delivery unconfirmed/);
+  assert.match(h.content().textContent, /<script>private reply<\/script>/);
+  assert.equal(h.nodes().some(node => node.tag === 'script'), false);
+  assert.equal(h.nodes().some(node => node.tag === 'button' && node.textContent === 'Claim ticket'), false);
+  assert.equal(h.field('enabled'), undefined);
+});
+
+test('member support requires a private bot contact before presenting the intake form', async () => {
+  const h = await harness({ member: true, groups: [], group: '-1009', view: 'support', data: { support: { admin: false, enabled: true, contactReady: false, tickets: [] } } });
+  assert.equal(h.field('subject'), undefined); assert.equal(h.field('body'), undefined);
+  const open = h.nodes().find(node => node.tag === 'a' && node.href.includes('start=support_'));
+  assert.equal(open.href, 'https://t.me/sautilinkpilotbot?start=support_-1009');
+  assert.equal(h.requests.some(row => row.body.action), false);
+});
+
+test('performance UI and settings are owner-only and never attach the current group', async () => {
+  const data = { performance: { samples: 12, percentiles: { total_ms: { p50: { upperMs: 100, overflow: false }, p95: { upperMs: 500, overflow: false } } }, issues: { observations: 8, slow: 5, errors: 2, retries: 1 }, preferences: { alerts: false } } };
+  const hidden = await harness({ view: 'performance', owner: false, data });
+  assert.equal(hidden.requests.some(row => row.body.view === 'performance'), false);
+  assert.doesNotMatch(hidden.get('tools-nav').textContent, /Speed & health/);
+  const h = await harness({ view: 'performance', owner: true, data });
+  const read = h.requests.find(row => row.body.view === 'performance');
+  assert.deepEqual(read.body, { view: 'performance', input: { hours: 24 } });
+  assert.match(h.content().textContent, /Slow operations: 5/);
+  assert.match(h.content().textContent, /Recorded errors: 2/);
+  h.field('alerts').checked = true; await h.submit('alerts');
+  assert.match(h.get('tools-modal').textContent, /Owner settings/);
+  assert.doesNotMatch(h.get('tools-modal').textContent, /Group: Example community/);
+  assert.equal(h.requests.some(row => row.body.action), false);
+  await h.confirm();
+  const sent = h.requests.find(row => row.body.action === 'performance_settings');
+  assert.equal(Object.hasOwn(sent.body, 'chatId'), false);
+  assert.deepEqual(sent.body.input, { alerts: true, language: 'en' });
+});
+
+test('community discovery stays off by default and requires explicit public-listing acknowledgement', async () => {
+  const privateHub = await harness({ view: 'community', data: { community: { hub: { visibility: 'private', slug: 'private-room', joinUrl: 'https://t.me/example' } } } });
+  assert.equal(privateHub.field('enabled').disabled, true); assert.equal(privateHub.field('enabled').checked, false);
+  const h = await harness({ view: 'community', data: { community: { hub: { visibility: 'public', slug: 'study-room', title: 'Study Room', joinUrl: 'https://t.me/example' }, discovery: { enabled: false, category: 'education' } } } });
+  assert.equal(h.field('enabled').disabled, false); assert.equal(h.field('enabled').checked, false);
+  assert.equal(h.requests.some(row => row.body.action), false);
+  h.field('enabled').checked = true; h.field('category').value = 'education';
+  await h.submit('enabled');
+  assert.match(h.get('tools-modal').textContent, /Visible to everyone/);
+  const confirm = h.nodes('tools-modal').find(node => node.tag === 'button' && node.textContent === 'Confirm');
+  assert.equal(confirm.disabled, true); await confirm.listeners.click();
+  assert.equal(h.requests.some(row => row.body.action), false);
+  await h.confirm();
+  const sent = h.requests.find(row => row.body.action === 'discovery_save');
+  assert.equal(sent.body.chatId, '-1001'); assert.deepEqual(sent.body.input, { enabled: true, category: 'education' });
+  assert.equal(h.requests.some(row => row.body.action === 'hub_save'), false);
+});
+
+test('event editor preserves configured timezone and capacity through review before submission', async () => {
+  const h = await harness({ view: 'events', data: { operations: { events: [], timezone: 'America/New_York' } } });
+  assert.equal(h.field('eventTimezone').value, 'America/New_York');
+  assert.match(h.content().textContent, /Starts · America\/New_York/);
+  h.field('title').value = 'Global workshop'; h.field('startsAt').value = '2027-02-10T19:00'; h.field('endsAt').value = '2027-02-10T21:00'; h.field('capacity').value = '12';
+  await h.submit('title');
+  assert.match(h.get('tools-modal').textContent, /America\/New_York/); assert.match(h.get('tools-modal').textContent, /Capacity12/);
+  assert.equal(h.requests.some(row => row.body.action), false); await h.confirm();
+  const sent = h.requests.find(row => row.body.action === 'event_create');
+  assert.equal(sent.body.input.startsAt, Date.parse('2027-02-11T00:00:00Z') / 1000);
+  assert.equal(sent.body.input.endsAt, Date.parse('2027-02-11T02:00:00Z') / 1000);
+  assert.equal(sent.body.input.capacity, 12); assert.equal(sent.body.chatId, '-1001');
+});
+
+test('members explicitly opt into private event reminders and never see event admin controls', async () => {
+  const starts = Math.floor(Date.now() / 1000) + 86400;
+  const h = await harness({ member: true, groups: [], group: '-1009', view: 'events', data: { events: { timezone: 'Europe/London', events: [{ id: 'future-event', title: 'Study workshop', starts_at: starts, ends_at: starts + 3600, status: 'active', capacity: 1, counts: { going: 1 }, waiting: 2, response: 'waitlisted', reminders: { enabled: false } }] } } });
+  assert.equal(h.field('eventTimezone'), undefined); assert.equal(h.field('title'), undefined);
+  assert.match(h.content().textContent, /Waiting list/); assert.match(h.content().textContent, /Reminders off/);
+  assert.equal(h.nodes().some(node => node.tag === 'button' && ['Edit', 'Cancel event'].includes(node.textContent)), false);
+  assert.equal(h.requests.some(row => row.body.action), false);
+  const lead = h.nodes().find(node => node.tag === 'select' && node.attributes['aria-label'] === 'Reminder for Study workshop'); lead.value = '15';
+  await h.nodes().find(node => node.tag === 'button' && node.textContent === 'Remind me privately').listeners.click();
+  assert.match(h.get('tools-modal').textContent, /Open \/start privately with the bot first/);
+  assert.equal(h.requests.some(row => row.body.action), false); await h.confirm();
+  const sent = h.requests.find(row => row.body.action === 'event_reminders');
+  assert.equal(sent.body.chatId, '-1009'); assert.deepEqual(sent.body.input, { id: 'future-event', enabled: true, leadMinutes: 15, language: 'en' });
 });

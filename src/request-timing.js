@@ -11,6 +11,7 @@ export const databaseIdentity = db => databaseBindings.get(db) || db;
 export function createRequestTiming(route, {
   now = () => performance.now(), sample = () => Math.random() < 0.02,
   report = record => console.info('pilot_performance', record),
+  observe,
 } = {}) {
   if (!ROUTES.has(route)) throw new TypeError('invalid_timing_route');
   const queuedAt = now();
@@ -29,7 +30,9 @@ export function createRequestTiming(route, {
     finish(outcome = 'ok') {
       const endedAt = now(), beganAt = startedAt ?? endedAt;
       const queueMs = Math.max(0, beganAt - queuedAt), handlingMs = Math.max(0, endedAt - beganAt);
-      if (outcome === 'ok' && queueMs < 250 && handlingMs < 1000 && !sample()) return;
+      // The distribution sample is independent of success and latency. Slow/error
+      // diagnostics are retained separately and must never bias its percentiles.
+      const sampled = sample();
       const record = {
         route, outcome: ['ok', 'retry', 'error'].includes(outcome) ? outcome : 'error',
         queue_ms: Math.round(queueMs), handling_ms: Math.round(handlingMs),
@@ -39,6 +42,8 @@ export function createRequestTiming(route, {
         first_action_ms: firstActionMs === null ? null : Math.round(firstActionMs),
         callback_ack_ms: callbackAckMs === null ? null : Math.round(callbackAckMs),
       };
+      try { observe?.(record, { sampled }); } catch { /* Optional, non-blocking observer. */ }
+      if (outcome === 'ok' && queueMs < 250 && handlingMs < 1000 && !sampled) return;
       try { report(record); } catch { /* Telemetry must not change an action's outcome. */ }
     },
   };

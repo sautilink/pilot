@@ -6,6 +6,8 @@ import { createControlStore } from '../src/control-store.js';
 import { createToolServices } from '../src/tools-api.js';
 import { createToolsCommands } from '../src/tools-commands.js';
 import { createModerator } from '../src/moderator.js';
+import { createOwnerAuth } from '../src/owner-auth.js';
+import { GROUP_PICKER_ID } from '../src/care-service.js';
 
 const GROUP=-1001001,OTHER_GROUP=-1001002,ADMIN=102,MEMBER=101,TARGET=103,BOT=900,NOW=1792670400;
 async function fixture(t) {
@@ -59,12 +61,12 @@ test('ask returns escaped approved content only after current group membership v
   assert.doesNotMatch(f.sends().at(-1).params.text,/our guide/);assert.match(f.sends().at(-1).params.text,/current members/);
 });
 
-test('events rechecks membership, excludes cancelled entries and uses EAT dates',async t=>{
+test('events rechecks membership, excludes cancelled entries and labels the configured timezone',async t=>{
   const f=await fixture(t);
   await f.tools.operations.perform({actor:{id:ADMIN},chatId:GROUP,action:'event_create',input:{title:'Open questions',startsAt:NOW+3600},requestId:f.requestId()});
   const cancelled=await f.tools.operations.perform({actor:{id:ADMIN},chatId:GROUP,action:'event_create',input:{title:'Cancelled event',startsAt:NOW+7200},requestId:f.requestId()});
   await f.tools.operations.perform({actor:{id:ADMIN},chatId:GROUP,action:'event_cancel',input:{id:cancelled.id},requestId:f.requestId()});
-  await f.handle('/events');assert.match(f.sends().at(-1).params.text,/Open questions/);assert.match(f.sends().at(-1).params.text,/EAT/);assert.doesNotMatch(f.sends().at(-1).params.text,/Cancelled event/);
+  await f.handle('/events');assert.match(f.sends().at(-1).params.text,/Open questions/);assert.match(f.sends().at(-1).params.text,/Africa\/Dar_es_Salaam/);assert.doesNotMatch(f.sends().at(-1).params.text,/Cancelled event/);
   f.roles.set(`${GROUP}:${MEMBER}`,{status:'kicked'});await f.handle('/events');assert.doesNotMatch(f.sends().at(-1).params.text,/Open questions/);
 });
 
@@ -132,4 +134,94 @@ test('ephemeral IDs can be reused across updates while update retries stay idemp
   await f.moderator.handle(f.update('/events',{message_id:0,ephemeral_message_id:5}));assert.equal(f.sends().length,2);
   const edit=f.update('/events',{message_id:0,ephemeral_message_id:5});edit.edited_message=edit.message;delete edit.message;
   await f.moderator.handle(edit);assert.equal(f.sends().length,2);
+});
+
+test('connect provides a native chooser and only an authenticated current admin can accept the share',async t=>{
+  const f=await fixture(t);
+  await f.handle('/connect',{chat:{id:MEMBER,type:'private'}});
+  const choice=f.sends().at(-1).params.reply_markup.keyboard[0][0].request_chat;
+  assert.equal(choice.request_id,GROUP_PICKER_ID);assert.equal(choice.chat_is_channel,false);
+  assert.equal(choice.bot_administrator_rights.can_delete_messages,true);
+  assert.equal(choice.bot_administrator_rights.can_restrict_members,true);
+  assert.equal(choice.user_administrator_rights.can_delete_messages,true);
+  assert.equal(f.sends().at(-1).params.chat_id,MEMBER);
+  const shared={chat:{id:MEMBER,type:'private'},chat_shared:{request_id:GROUP_PICKER_ID,chat_id:GROUP}};
+  await f.handle('',shared);
+  assert.match(f.sends().at(-1).params.text,/current members with the required role/);
+  assert.equal((await f.db.prepare('SELECT COUNT(*) AS n FROM pilot_known_admins').first()).n,0);
+  const count=f.sends().length;
+  assert.equal(await f.handle('',{...shared,chat_shared:{request_id:GROUP_PICKER_ID+1,chat_id:GROUP}}),false);
+  await f.handle('',{...shared,chat:{id:ADMIN,type:'private'}});
+  assert.equal(f.sends().length,count,'a mismatched private chat cannot impersonate its owner');
+  await f.base.settings({ready:'1'});
+  await f.handle('',{chat:{id:ADMIN,type:'private'},from:{id:ADMIN,is_bot:false,first_name:'Asha',language_code:'en'},chat_shared:{request_id:GROUP_PICKER_ID,chat_id:GROUP}});
+  assert.equal((await f.base.adminContext(ADMIN)).chat_id,String(GROUP));
+  assert.ok(f.sends().some(call=>call.params.reply_markup?.remove_keyboard===true));
+  assert.match(f.sends().at(-1).params.reply_markup.inline_keyboard[0][0].web_app.url,/section=doctor/);
+  assert.equal(f.calls.some(call=>['deleteMessage','banChatMember','restrictChatMember'].includes(call.method)),false);
+});
+
+test('doctor and policy commands expose group diagnostics only to a current admin with private delivery',async t=>{
+  const f=await fixture(t);
+  await f.base.settings({ready:'1'});
+  for(const command of ['/doctor','/policytest']) {
+    await f.handle(command);
+    assert.match(f.sends().at(-1).params.text,/current members with the required role/);
+    assert.equal(f.sends().at(-1).params.reply_markup,undefined);
+  }
+  await f.handle('/doctor',{from:{id:ADMIN,is_bot:false,language_code:'en'}});
+  const diagnosis=f.sends().at(-1).params;
+  assert.match(diagnosis.text,/Bot connection/);assert.match(diagnosis.text,/Ban members/);
+  assert.equal(diagnosis.ephemeral_message_parameters.receiver_user_id,ADMIN);
+  assert.match(diagnosis.reply_markup.inline_keyboard[0][0].url,new RegExp(`start=doctor_${GROUP}$`));
+  await f.handle(`/start policytest_${GROUP}`,{chat:{id:ADMIN,type:'private'},from:{id:ADMIN,is_bot:false,language_code:'en'}});
+  const preview=f.sends().at(-1).params;
+  assert.match(preview.text,/Tests do not delete messages, ban members or add strikes/);
+  assert.match(preview.reply_markup.inline_keyboard[0][0].web_app.url,/section=policy/);
+  f.roles.set(`${GROUP}:${ADMIN}`,{status:'member'});
+  await f.handle('/doctor',{from:{id:ADMIN,is_bot:false,language_code:'en'}});
+  assert.doesNotMatch(f.sends().at(-1).params.text,/Bot connection/);
+  assert.equal(f.calls.some(call=>['deleteMessage','banChatMember','restrictChatMember'].includes(call.method)),false);
+});
+
+test('performance command ignores owner-name impersonation and opens only the numeric owner private panel',async t=>{
+  const f=await fixture(t),owner=createOwnerAuth({db:f.db});await owner.ensure();
+  await f.db.prepare('UPDATE pilot_owner SET user_id=? WHERE singleton=1').bind(String(ADMIN)).run();
+  await f.handle('/performance',{chat:{id:MEMBER,type:'private'},from:{id:MEMBER,is_bot:false,username:'drcharlestz',language_code:'en'}});
+  assert.match(f.sends().at(-1).params.text,/current members with the required role/);
+  assert.equal(f.sends().at(-1).params.reply_markup,undefined);
+  await f.handle('/performance',{chat:{id:ADMIN,type:'private'},from:{id:ADMIN,is_bot:false,language_code:'en'}});
+  const target=new URL(f.sends().at(-1).params.reply_markup.inline_keyboard[0][0].web_app.url);
+  assert.equal(target.searchParams.get('section'),'performance');assert.equal(target.searchParams.has('chat'),false);
+  assert.equal(f.sends().at(-1).params.chat_id,ADMIN);
+  await f.handle('/performance',{from:{id:ADMIN,is_bot:false,language_code:'en'}});
+  assert.match(f.sends().at(-1).params.text,/private chat/);
+  assert.equal(f.sends().at(-1).params.reply_markup,undefined);
+  assert.equal(f.sends().at(-1).params.ephemeral_message_parameters.receiver_user_id,ADMIN);
+});
+
+test('support links retain only the verified member group and direct tickets into private bot tools',async t=>{
+  const f=await fixture(t);
+  await f.handle('/support');
+  const group=f.sends().at(-1).params;
+  assert.equal(group.ephemeral_message_parameters.receiver_user_id,MEMBER);
+  assert.equal(group.reply_markup.inline_keyboard[0][0].url,`https://t.me/sautilinkpilotbot?start=support_${GROUP}`);
+  await f.handle(`/start support_${GROUP}`,{chat:{id:MEMBER,type:'private'}});
+  const target=new URL(f.sends().at(-1).params.reply_markup.inline_keyboard[0][0].web_app.url);
+  assert.equal(target.searchParams.get('section'),'support');assert.equal(target.searchParams.get('chat'),String(GROUP));
+  f.roles.set(`${OTHER_GROUP}:${MEMBER}`,{status:'left'});
+  await f.handle(`/start support_${OTHER_GROUP}`,{chat:{id:MEMBER,type:'private'}});
+  assert.match(f.sends().at(-1).params.text,/current members with the required role/);
+  assert.equal(f.sends().at(-1).params.reply_markup,undefined);
+  assert.equal((await f.db.prepare("SELECT name FROM sqlite_master WHERE name='pilot_support_tickets'").first()),null,'opening a support command does not silently create tickets');
+});
+
+test('events command formats the same stored instant in the group timezone instead of fixed EAT',async t=>{
+  const f=await fixture(t),startsAt=NOW+3600;
+  await f.tools.operations.perform({actor:{id:ADMIN},chatId:GROUP,action:'event_settings',input:{timezone:'America/New_York'},requestId:f.requestId()});
+  await f.tools.operations.perform({actor:{id:ADMIN},chatId:GROUP,action:'event_create',input:{title:'Across timezones',startsAt},requestId:f.requestId()});
+  await f.handle('/events');
+  const text=f.sends().at(-1).params.text;
+  const local=new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short',timeZone:'America/New_York'}).format(new Date(startsAt*1000));
+  assert.ok(text.includes(local));assert.match(text,/America\/New_York/);assert.doesNotMatch(text,/Africa\/Dar_es_Salaam| EAT/);
 });

@@ -37,7 +37,7 @@ test('robots advertises the sitemap and keeps public assets plus noindex shells 
 test('sitemap contains only canonical public language versions with reciprocal alternates', async () => {
   const xml = await (await handleFetch(request('/sitemap.xml?theme=dark&tgWebAppData=private'), {})).text();
   const locations = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(match => match[1]);
-  assert.deepEqual(locations, ['/', '/privacy', '/updates', '/roadmap', '/developers'].flatMap(path=>[`${BASE}${path}`,`${BASE}${path}?lang=sw`]));
+  assert.deepEqual(locations, ['/', '/privacy', '/updates', '/roadmap', '/developers', '/communities'].flatMap(path=>[`${BASE}${path}`,`${BASE}${path}?lang=sw`]));
   assert.deepEqual(locations, publicSeoUrls());
   const entries = [...xml.matchAll(/<url>([\s\S]*?)<\/url>/g)].map(match => match[1]);
   for (const entry of entries) {

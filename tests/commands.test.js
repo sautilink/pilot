@@ -12,7 +12,7 @@ import {
 const GROUP = -1001001, OTHER_GROUP = -1001002, ADMIN = 102, USER = 101, TARGET = 103, BOT = 900;
 const NOW = 1792584000;
 const identity = { id: BOT, is_bot: true, first_name: 'SautiLink Pilot', username: 'sautilinkpilotbot' };
-const sensitive = /\/(?:status|strikes|forgive|unban|pause|resume|testnotice)\b|BOT_TOKEN|webhook|workers\.dev|\/setup|D1|Durable Object/i;
+const sensitive = /\/(?:status|strikes|forgive|unban|pause|resume|testnotice|doctor|policytest|performance)\b|BOT_TOKEN|webhook|workers\.dev|\/setup|D1|Durable Object/i;
 
 class FakeTelegram {
   constructor() {
@@ -381,12 +381,12 @@ test('testnotice does not claim delivery without a Telegram message ID', async t
   assert.doesNotMatch(sent(f).at(-1).params.text, /Tangazo la majaribio limetumwa/);
 });
 
-test('private callback navigation acknowledges promptly, edits in place, and supports every page in both languages', async t => {
+test('private navigation acknowledges promptly and uses a native group picker only for connection', async t => {
   const f = await fixture(t);
   await f.store.setAdminContext(ADMIN, GROUP, NOW);
   for (const language of ['sw', 'en']) {
     await f.store.setLanguage('user', ADMIN, language, NOW);
-    for (const page of ['home', 'about', 'how', 'rules', 'connect', 'developer', 'help', 'admin', 'status', 'language']) {
+    for (const page of ['home', 'about', 'how', 'rules', 'developer', 'help', 'admin', 'status', 'language']) {
       const start = f.api.calls.length;
       assert.equal(await f.callback(callback(`pilot:${page}`, ADMIN)), true);
       assert.equal(f.api.calls[start].method, 'answerCallbackQuery');
@@ -395,10 +395,23 @@ test('private callback navigation acknowledges promptly, edits in place, and sup
       assert.equal(edit.message_id, 55);
       assert.ok(edit.reply_markup.inline_keyboard.length > 0);
       assert.ok(edit.text.length < 4096);
+      assert.equal(f.api.calls.slice(start).some(call => call.method === 'sendMessage'), false);
       if (page === 'status') assert.match(edit.text, language === 'en' ? /Announcements:/ : /Matangazo:/);
     }
+    const start = f.api.calls.length;
+    assert.equal(await f.callback(callback('pilot:connect', ADMIN)), true);
+    assert.equal(f.api.calls[start].method, 'answerCallbackQuery');
+    assert.equal(f.api.calls.slice(start).some(call => call.method === 'editMessageText'), false);
+    const reply = sent(f).at(-1).params;
+    assert.equal(reply.chat_id, ADMIN);
+    const picker = reply.reply_markup.keyboard.flat().find(button => button.request_chat)?.request_chat;
+    assert.ok(picker);
+    assert.equal(picker.chat_is_channel, false);
+    assert.equal(picker.bot_administrator_rights.can_delete_messages, true);
+    assert.equal(picker.bot_administrator_rights.can_restrict_members, true);
+    assert.equal(reply.reply_markup.one_time_keyboard, true);
   }
-  assert.equal(sent(f).length, 0);
+  assert.equal(sent(f).length, 2);
 });
 
 test('callback menus refuse another user’s private chat and messages from another bot', async t => {
@@ -506,9 +519,15 @@ test('command menus and bot descriptions are localized without publishing admin-
     const commands = getPublicCommands(language);
     assert.ok(commands.some(command => command.command === 'language'));
     assert.ok(commands.some(command => command.command === 'howitworks'));
-    assert.ok(!commands.some(command => ['status', 'unban', 'forgive', 'pause', 'testnotice'].includes(command.command)));
-    assert.ok(getGroupCommands(language).every(command => !['status', 'unban', 'forgive', 'admin', 'language'].includes(command.command)));
+    assert.ok(!commands.some(command => ['status', 'unban', 'forgive', 'pause', 'testnotice', 'doctor', 'policytest', 'performance'].includes(command.command)));
+    assert.ok(getGroupCommands(language).every(command => !['status', 'unban', 'forgive', 'admin', 'language', 'doctor', 'policytest', 'performance'].includes(command.command)));
     assert.ok(getAdminCommands(language).some(command => command.command === 'testnotice'));
+    for (const name of ['connect', 'doctor', 'policytest']) assert.ok(getAdminCommands(language).some(command => command.command === name));
+    for (const name of ['support', 'communities']) {
+      assert.ok(commands.some(command => command.command === name));
+      assert.ok(getGroupCommands(language).some(command => command.command === name));
+    }
+    assert.ok(getAdminCommands(language).every(command => command.command !== 'performance'));
     assert.ok(getBotDescription(language).length <= 512);
     assert.ok(getBotShortDescription(language).length <= 120);
     for (const command of getAdminCommands(language)) assert.ok(command.description.length <= 256);
@@ -622,4 +641,21 @@ test('early callback acknowledgement does not replace fresh admin checks or disc
     message: { message_id: 55, chat: { id: ADMIN, type: 'private' }, from: identity },
   }), 904, admitted);
   assert.equal(f.api.callsOf('editMessageText').length, edits);
+});
+
+test('public integration guidance uses hosted documentation and admin tools stay behind the admin screen', () => {
+  for (const language of ['sw', 'en']) {
+    for (const page of ['home', 'help', 'developer', 'connect']) {
+      const rendered = renderBotPage(page, { language });
+      assert.doesNotMatch(JSON.stringify(rendered), /github\.com|GitHub|clone|D1|Durable Object|\/performance|\/doctor|\/policytest/);
+    }
+    const developer = renderBotPage('developer', { language });
+    assert.ok(developer.reply_markup.inline_keyboard.flat().some(button => button.url === `https://pilot.sautilink.com/developers${language === 'sw' ? '?lang=sw' : ''}`));
+    assert.match(developer.text, language === 'en' ? /Drafts are never sent automatically/ : /Rasimu haitumwi moja kwa moja/);
+    const admin = renderBotPage('admin', { language, groupId: GROUP, groupTitle: 'Our group' });
+    assert.match(admin.text, /\/doctor/); assert.match(admin.text, /\/policytest/);
+    assert.ok(admin.reply_markup.inline_keyboard.flat().some(button => button.url?.endsWith(`?start=doctor_${GROUP}`)));
+    assert.ok(admin.reply_markup.inline_keyboard.flat().some(button => button.url?.endsWith(`?start=policytest_${GROUP}`)));
+    assert.doesNotMatch(renderBotPage('admin', { language }).text, /\/doctor|\/policytest/);
+  }
 });
