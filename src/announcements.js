@@ -1,6 +1,11 @@
 import { escapeHtml } from './policy.js';
 import { fillTemplate } from './templates.js';
 
+const CORPORATE_URL='https://www.sautilink.com/';
+const CORPORATE_LABEL='from SautiLink Corporation';
+const FOOTER_RICH=`<i>SautiLink Pilot · <a href="${CORPORATE_URL}">${CORPORATE_LABEL}</a></i>`;
+const FOOTER_PLAIN=`SautiLink Pilot · ${CORPORATE_LABEL} (${CORPORATE_URL})`;
+
 function displayName(message,language) {
   return [message.from?.first_name,message.from?.last_name].filter(Boolean).join(' ') || message.sender_chat?.title || (language==='en' ? 'Member' : 'Mtumiaji');
 }
@@ -19,16 +24,15 @@ export function formatAnnouncement(row,message,success=true,language='sw',settin
   const duration=row.strike===1 ? (en ? '24 hours' : 'Saa 24') : row.strike===2 ? (en ? '7 days' : 'Siku 7') : (en ? 'Permanent' : 'Kudumu');
   const identity=row.user_id ? `ID: ${Number(row.user_id)}` : (en ? 'Posted on behalf of a channel' : 'Ujumbe umetumwa kwa niaba ya channel');
   const title=success ? (en ? '⛔ MEMBER BANNED' : '⛔ MEMBER AMEFUNGIWA') : (en ? '🛡 MESSAGE REMOVED' : '🛡 UJUMBE UMEONDOLEWA');
-  const labels=en ? {reason:'Reason',penalty:'Penalty',strike:'Offense',ends:'Ends',removed:'The message that broke the rules has been removed.',expires:'When the ban expires, the member can rejoin.',permanent:'An administrator must decide whether to lift this ban.',review:'The message was removed. A ban is not confirmed; an administrator should review the sender.',tag:'SautiLink Pilot · Space for your community.'} : {reason:'Sababu',penalty:'Adhabu',strike:'Kosa',ends:'Mwisho',removed:'Ujumbe uliokiuka sheria umeondolewa.',expires:'Ban ikiisha, mtumiaji anaweza kujiunga tena.',permanent:'Kuondoa ban kunahitaji uamuzi wa admin.',review:'Ujumbe umeondolewa. Ban haijathibitishwa; admin akague mtumaji.',tag:'SautiLink Pilot · Group lenye utulivu.'};
+  const labels=en ? {reason:'Reason',penalty:'Penalty',strike:'Offense',ends:'Ends',removed:'The message that broke the rules has been removed.',expires:'When the ban expires, the member can rejoin.',permanent:'An administrator must decide whether to lift this ban.',review:'The message was removed. A ban is not confirmed; an administrator should review the sender.'} : {reason:'Sababu',penalty:'Adhabu',strike:'Kosa',ends:'Mwisho',removed:'Ujumbe uliokiuka sheria umeondolewa.',expires:'Ban ikiisha, mtumiaji anaweza kujiunga tena.',permanent:'Kuondoa ban kunahitaji uamuzi wa admin.',review:'Ujumbe umeondolewa. Ban haijathibitishwa; admin akague mtumaji.'};
   const body=success
     ? [name,identity,'',`${labels.reason}: ${reasons.join(' ')}`,`${labels.penalty}: ${duration}`,`${labels.strike}: ${row.strike} / 3`,`${labels.ends}: ${expiry(row.until_date,language)}`,'',labels.removed,row.until_date ? labels.expires : labels.permanent]
     : [name,identity,'',`${labels.reason}: ${reasons.join(' ')}`,'',labels.review];
-  let plain=[title,'',...body,'',labels.tag].join('\n');
+  let plain=[title,'',...body].join('\n');
   // A banned user is no longer a member. Names must not depend on tg:// mentions.
   let rich=[`<b>${title}</b>`,'',`<b>${escapeHtml(name)}</b>`,row.user_id ? `<code>${escapeHtml(identity)}</code>` : escapeHtml(identity),'',
     `<b>${labels.reason}</b>\n${reasons.map(reason=>`• ${escapeHtml(reason)}`).join('\n')}`,
-    ...(success ? ['',`⏳ <b>${labels.penalty}:</b> ${duration}`,`📍 <b>${labels.strike}:</b> ${row.strike} / 3`,`🗓 <b>${labels.ends}:</b> ${escapeHtml(expiry(row.until_date,language))}`,'',`🗑 ${labels.removed}`,row.until_date ? labels.expires : labels.permanent] : ['',labels.review]),
-    '',`<i>${labels.tag}</i>`].join('\n');
+    ...(success ? ['',`⏳ <b>${labels.penalty}:</b> ${duration}`,`📍 <b>${labels.strike}:</b> ${row.strike} / 3`,`🗓 <b>${labels.ends}:</b> ${escapeHtml(expiry(row.until_date,language))}`,'',`🗑 ${labels.removed}`,row.until_date ? labels.expires : labels.permanent] : ['',labels.review])].join('\n');
   if(success && settings.notice_template==='compact') {
     plain=[title,name,identity,`${labels.reason}: ${reasons.join(' ')}`,`${labels.penalty}: ${duration} · ${labels.strike}: ${row.strike}/3`,`${labels.ends}: ${expiry(row.until_date,language)}`,labels.removed].join('\n');
     rich=escapeHtml(plain);
@@ -42,7 +46,9 @@ export function formatAnnouncement(row,message,success=true,language='sw',settin
     const custom=fillTemplate(extra,{user:name,reason:reasons.join(' '),duration:success?duration:(en?'Review pending':'Ukaguzi unasubiri'),group:message.chat?.title || 'Group'},800);
     plain+=`\n\n${custom}`;rich+=`\n\n${escapeHtml(custom)}`;
   }
-  return {rich,plain};
+  // Keep the attribution last in every style, including custom admin text. The
+  // plain fallback retains a usable URL without repeating rejected HTML.
+  return {rich:`${rich}\n\n${FOOTER_RICH}`,plain:`${plain}\n\n${FOOTER_PLAIN}`};
 }
 
 export function noticeErrorKind(error) {

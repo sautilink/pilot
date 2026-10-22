@@ -11,6 +11,10 @@ Telegram moderation for any eligible group, with a bilingual Telegram Mini App, 
 
 The public site, setup and privacy pages, and Telegram Mini App use the same visual language as SautiLink Router: Inter, the official SautiLink logo, neutral grouped surfaces, rounded cards and restrained blue actions. The public home puts the group connection steps on the first screen. Swahili and English share the same layout, including narrow mobile screens.
 
+The website opens in English unless `?lang=sw` is selected; internal links preserve the explicit language choice. Public pages and the Mini App reuse Router's self-hosted animated icon package. Icons have static SVG artwork before JavaScript loads, animate on interaction and introductory headings, and respect reduced-motion preferences. The scripts load with `defer` from cacheable same-origin routes without querying Telegram or the database. Source provenance and upstream licenses are in `src/vendor/public-icons/`.
+
+Moderation notices end with “SautiLink Pilot · from SautiLink Corporation”. The corporate attribution links to `https://www.sautilink.com/` in Telegram, with website previews disabled. All notice styles and both languages share this footer; the plain-text fallback retains the URL.
+
 Appearance follows Telegram or the device preference unless the visitor chooses light or dark. An explicit choice travels in a `theme` URL parameter; Pilot does not store it in browser storage or copy Telegram launch credentials into navigation links. The public site remains informational, while group data and administrative actions require the verified Telegram identity described below.
 
 ## Response path and performance
@@ -252,8 +256,8 @@ The language choices are independent:
 | --- | --- |
 | Private Telegram chat | Use `/language` or the **Lugha / Language** button, then select a language. The saved personal choice takes precedence. Without one, Telegram's `language_code` selects English for `en` or an `en-…` code; other or missing codes use Swahili. |
 | Telegram group | A verified group admin sends `/language sw` or `/language en` in that group. Unconfigured groups use Swahili. One member's personal preference does not change the group's language. |
-| Mini App | The SW / EN choice and the opening button determine the current app language. Group language and personal Telegram preferences remain separate. |
-| Website | The visible **SW / EN** selector uses `?lang=sw` or `?lang=en`. Internal navigation preserves the selected language. Home, the local simulator, privacy, and operator setup are translated. No browser storage is used for the choice. |
+| Mini App | The SW / EN choice and the opening button determine the current app language. A direct visit without a valid language parameter uses English. Group language and personal Telegram preferences remain separate. |
+| Website | English is the default for new visits and invalid language parameters. The visible **SW / EN** selector uses `?lang=sw` or `?lang=en`. Internal navigation preserves the selected language. Home, the local simulator, privacy, and operator setup are translated. No browser storage is used for the choice. |
 
 Private admin replies use the recipient's private preference; group notices use the group's preference. Telegram's command descriptions and bot profile descriptions are registered in default/Swahili and English variants. Telegram chooses those native menu descriptions using its own language settings; Pilot's saved choice controls the messages it renders.
 
@@ -454,6 +458,7 @@ node --test --test-isolation=none tests/*.test.js
 - `src/handler.js`: localized HTTP routing, authenticated setup, webhook validation, and the ready-installation upgrade trigger.
 - `src/index.js`: Cloudflare entry point, per-chat and global broadcast Durable Object queues, delivery alarms, scheduled monitoring, and retention cleanup.
 - `src/pages.js`: bilingual public website, local interactive simulator, privacy, and operator setup.
+- `src/public-icons.js` and `src/vendor/public-icons/`: shared Router icon artwork, deferred browser motion assets, cacheable asset responses and upstream provenance/licenses.
 - `migrations/`: initial and supplemental notification, admin, language, control-center and guardrail schemas.
 - `wrangler.jsonc`: existing Worker/domain, resource bindings, ten-minute monitoring, and daily cleanup schedules.
 - `tests/`: policy, moderation, command, handler, and page checks using controlled Telegram responses and local SQLite.

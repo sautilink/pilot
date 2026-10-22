@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { themeHead } from '../src/ui-system.js';
+import { themeHead, themeButton } from '../src/ui-system.js';
 import { renderHome, renderPrivacy, renderSetup } from '../src/pages.js';
 import { renderDashboard } from '../src/dashboard.js';
 
@@ -62,6 +62,14 @@ test('theme navigation retains language but never copies signed launch parameter
   for (const link of h.links) assert.doesNotMatch(link.attributes.href, /private-launch|private-fragment|tgWebAppData/);
   assert.equal(h.writes.length, 0);
   assert.doesNotMatch(themeHead(), /localStorage|sessionStorage|fetch\(/);
+});
+
+test('the theme control uses the shared animated moon and sun with localized accessible labels', () => {
+  const button = themeButton();
+  assert.match(button, /aria-label="Switch color theme"/);
+  assert.match(button, /data-public-icon="moon-0-1"/);
+  assert.match(button, /data-public-icon="sun-0-1"/);
+  assert.match(themeButton('sw'), /aria-label="Badili mwonekano"/);
 });
 
 test('public pages share Router navigation and the connection task precedes the simulator', () => {

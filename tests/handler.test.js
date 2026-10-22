@@ -120,6 +120,22 @@ test('health is unavailable before configuration and never claims an active bot'
   assert.equal(response.headers.get('Cache-Control'), 'no-store');
 });
 
+test('public icon assets are served before any configuration, database, or bot access', async () => {
+  const unavailable = new Proxy({}, { get() { throw new Error('Public assets must not access service configuration'); } });
+  for (const name of ['icons.js', 'adapter.js']) {
+    const response = await handleFetch(request(`/assets/public-icons/${name}`), unavailable);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('Content-Type'), /javascript/);
+    assert.match(response.headers.get('Cache-Control'), /^public,/);
+    assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff');
+    assert.ok((await response.text()).length > 1000);
+    const head = await handleFetch(request(`/assets/public-icons/${name}`, { method: 'HEAD' }), unavailable);
+    assert.equal(head.status, 200);
+    assert.equal(await head.text(), '');
+    assert.equal(head.headers.get('ETag'), response.headers.get('ETag'));
+  }
+});
+
 test('missing and incorrect webhook secrets are rejected before group forwarding', async (t) => {
   const f = await fixture(t, { ready: true });
   for (const supplied of [null, 'incorrect-secret']) {
@@ -331,23 +347,27 @@ test('forced operator setup reapplies metadata without resetting readiness time 
   assert.equal(f.calls.filter(call => call.method === 'setMyCommands').length, 12);
 });
 
-test('page language parameters allow English and otherwise fall back to Swahili without reflecting arbitrary input', async (t) => {
+test('all website routes default to English and honor explicit Swahili without reflecting arbitrary input', async (t) => {
   const f = await fixture(t, { ready: true });
-  for (const path of ['/', '/privacy', '/setup']) {
-    const english = await handleFetch(request(`${path}?lang=en`), f.env, f.ctx);
-    assert.match(await english.text(), /<html lang="en"/);
+  for (const path of ['/', '/privacy', '/setup', '/app']) {
+    for (const query of ['', '?lang=en']) {
+      const english = await handleFetch(request(`${path}${query}`), f.env, f.ctx);
+      assert.match(await english.text(), /<html lang="en"/);
+    }
+    const swahili = await handleFetch(request(`${path}?lang=sw`), f.env, f.ctx);
+    assert.match(await swahili.text(), /<html lang="sw"/);
     const arbitrary = 'malicious-language-marker';
     const fallback = await handleFetch(request(`${path}?lang=${arbitrary}`), f.env, f.ctx);
     const text = await fallback.text();
-    assert.match(text, /<html lang="sw"/);
+    assert.match(text, /<html lang="en"/);
     assert.ok(!text.includes(arbitrary));
   }
   assert.equal(f.calls.length, 0);
 });
 
-test('English setup returns localized authentication, readiness, and success feedback while Swahili remains the default', async (t) => {
+test('setup feedback defaults to English and honors an explicit Swahili choice', async (t) => {
   const f = await fixture(t);
-  const missing = await handleFetch(request('/api/setup?lang=en', { method: 'POST', body: '{}' }), f.env);
+  const missing = await handleFetch(request('/api/setup', { method: 'POST', body: '{}' }), f.env);
   assert.equal(missing.status, 401);
   assert.match((await missing.json()).message, /missing or incorrect/);
   const invalid = await handleFetch(setupRequest({ key: 'incorrect', lang: 'en' }), f.env);
@@ -356,7 +376,7 @@ test('English setup returns localized authentication, readiness, and success fee
   const missingDatabase = await handleFetch(setupRequest({ lang: 'en' }), { ...f.env, DB: undefined });
   assert.equal(missingDatabase.status, 503);
   assert.match((await missingDatabase.json()).message, /Add a D1 database binding named DB/);
-  const swahili = await handleFetch(setupRequest({ key: 'incorrect' }), f.env);
+  const swahili = await handleFetch(setupRequest({ key: 'incorrect', lang: 'sw' }), f.env);
   assert.match((await swahili.json()).message, /si sahihi/);
   const success = await handleFetch(setupRequest({ lang: 'en' }), f.env);
   assert.equal(success.status, 200);

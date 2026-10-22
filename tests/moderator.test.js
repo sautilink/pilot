@@ -428,9 +428,13 @@ test('a definite HTML or mention rejection retries a ban notice with a plain nam
   const notices = f.api.callsOf('sendMessage');
   assert.equal(notices.length, 2);
   assert.equal(f.api.callsOf('banChatMember').length, 1);
+  assert.equal(notices[0].params.parse_mode, 'HTML');
+  assert.match(notices[0].params.text, /<a href="https:\/\/www\.sautilink\.com\/">from SautiLink Corporation<\/a>/);
   assert.ok(!notices[1].params.parse_mode, 'fallback must not repeat the formatting that Telegram rejected');
   assert.doesNotMatch(notices[1].params.text, /tg:\/\/user\?id=|<\/?(?:b|a)(?:\s|>)/);
   assert.match(notices[1].params.text, /Juma/);
+  assert.match(notices[1].params.text, /SautiLink Pilot · from SautiLink Corporation \(https:\/\/www\.sautilink\.com\/\)$/);
+  assert.ok(notices.every(notice => notice.params.link_preview_options.is_disabled), 'the attribution must not add a website preview');
 });
 
 test('an invalid forum topic retries the ban announcement in the main group', async (t) => {

@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/sautilink/router",
+  "gitTree": "48a687b7d0e34155e834950213f4af4ff6a6bf45",
+  "package": "@animateicons/vanilla",
+  "version": "0.1.0",
+  "files": {
+    "icons.js": "c007298f07c3cf860fe4d050250517cd5fef075276c800fddb83f2d91c14a545",
+    "adapter.js": "3b5fbac5673b49b4adf1d33eea959bf175f65115058274516d10579097a251a3",
+    "icons.css": "626e2e91e92e0ce9cf04d11df777926c13970160e9ab84f548f4fc3b39d093ac",
+    "manifest.json": "1eadc912fd3c9cfd211c67ef634fb685d04129c3232c5e17a8e00fee9fe1bbe1",
+    "LICENSE": "232223542164bfef71a7492f8c6f98ccb2ce5bcbbf9fd27fd106be10e6ad6807",
+    "LICENSE-MOTION.md": "2fb45e42d92bc2d373dd190bd2022bbbcda92c74cf5c63a70164d53189835a9c",
+    "NOTICE.md": "9d62f6af5d363beb778f3c3f9b41bc393c7730de322970f8db890154d17c505c",
+    "THIRD_PARTY_NOTICES.md": "36d8e922a8368843e78e2149ca77d501062381ed49da59381276eafc52a0740c"
+  },
+  "upstreamManifestRuntimeSha256": "9f32b5aea0b4559fe1f87fbb373aac09e49b0886fc47ed56eb667eba90ed7c44",
+  "note": "Original Router files are unchanged. The manifest runtimeSha256 field differs from the delivered icons.js; files.icons.js records the actual copied bytes."
+}

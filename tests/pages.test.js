@@ -22,12 +22,12 @@ test('public page only creates the add-to-group link for a ready, valid bot iden
     const page = renderHome(options);
     assert.doesNotMatch(page, /\?startgroup=/);
     assert.doesNotMatch(page, /<script>alert/);
-    assert.match(page, /Bot inaandaliwa/);
+    assert.match(page, /Bot coming soon/);
   }
 });
 
 test('public rules explain the agreed exceptions and consequential Telegram limitations', () => {
-  const page = renderHome();
+  const page = renderHome({ lang: 'sw' });
   for (const text of ['Saa 24', 'Siku 7', 'Permanent', 'anonymous admins', 'linked channel', 'supergroups', 'copy-paste', 'ujumbe mwingine', 't.me/techhubtz', 't.me/drcharlesofficial']) assert.ok(page.includes(text), text);
   assert.match(page, /Mfano wa tangazo · Si tukio halisi/);
   assert.match(page, /lang="sw"/);
@@ -75,7 +75,7 @@ test('operator status sends the key only in Authorization and renders text safel
   await h.elements['check-status'].listeners.click();
   assert.equal(h.requests.length, 1);
   const { url, options } = h.requests[0];
-  assert.equal(url, '/api/setup/status');
+  assert.equal(url, '/api/setup/status?lang=sw');
   assert.equal(options.method, 'GET');
   assert.equal(options.headers.Authorization, `Bearer ${key}`);
   assert.equal(options.body, undefined);
@@ -93,7 +93,7 @@ test('connecting uses an empty POST body; a script failure cannot put the key in
   await h.elements['setup-form'].listeners.submit({ preventDefault() { prevented = true; } });
   assert.equal(prevented, true);
   assert.equal(h.requests.length, 1);
-  assert.equal(h.requests[0].url, '/api/setup');
+  assert.equal(h.requests[0].url, '/api/setup?lang=sw');
   assert.equal(h.requests[0].options.method, 'POST');
   assert.equal(h.requests[0].options.body, '{}');
   assert.equal(h.requests[0].options.headers.Authorization, `Bearer ${key}`);
@@ -195,7 +195,7 @@ test('public copy explains owner product announcements and retention without exp
 });
 
 test('privacy page describes per-group metadata without claiming to archive conversations', () => {
-  const page = renderPrivacy();
+  const page = renderPrivacy('sw');
   assert.match(page, /haihifadhi nakala kamili za mazungumzo/);
   assert.match(page, /Historia hii hutenganishwa kwa kila group/);
   assert.match(page, /Telegram na Cloudflare/);
@@ -300,19 +300,27 @@ test('public visitor navigation hides owner setup and provides honest local demo
   assert.doesNotMatch(h.html, /(?:localStorage|sessionStorage)/);
 });
 
-test('English navigation keeps the selected language and each selector stays on its current page', () => {
-  for (const [path, page] of [
-    ['/', renderHome({ username: 'sautilinkpilotbot', ready: true, lang: 'en' })],
-    ['/privacy', renderPrivacy('en')],
-    ['/setup', renderSetup('en')],
-  ]) {
-    assert.match(page, /<html lang="en">/);
-    assert.ok(page.includes(`href="${path}?lang=en" lang="en" hreflang="en" aria-label="English" aria-current="page">EN</a>`));
-    assert.ok(page.includes(`href="${path}?lang=sw" lang="sw" hreflang="sw" aria-label="Kiswahili">SW</a>`));
-    for (const href of ['/?lang=en', '/?lang=en#jaribu', '/?lang=en#sheria', '/?lang=en#anza', '/privacy?lang=en']) assert.ok(page.includes(`href="${href}"`), href);
-    assert.doesNotMatch(page, /(?:localStorage|sessionStorage)/);
+test('both languages stay selected across public navigation and page-specific language switches', () => {
+  for (const lang of ['en', 'sw']) {
+    for (const [path, page] of [
+      ['/', renderHome({ username: 'sautilinkpilotbot', ready: true, lang })],
+      ['/privacy', renderPrivacy(lang)],
+      ['/setup', renderSetup(lang)],
+    ]) {
+      assert.ok(page.includes(`<html lang="${lang}">`));
+      for (const [locale, label] of [['en', 'English'], ['sw', 'Kiswahili']]) {
+        assert.ok(page.includes(`href="${path}?lang=${locale}" lang="${locale}" hreflang="${locale}" aria-label="${label}"${locale === lang ? ' aria-current="page"' : ''}>${locale.toUpperCase()}</a>`));
+      }
+      for (const href of [`/?lang=${lang}`, `/?lang=${lang}#jaribu`, `/?lang=${lang}#sheria`, `/?lang=${lang}#anza`, `/privacy?lang=${lang}`]) assert.ok(page.includes(`href="${href}"`), href);
+      assert.doesNotMatch(page, /(?:localStorage|sessionStorage)/);
+      // The only links allowed to switch language are the explicit selectors.
+      for (const match of page.matchAll(/<a\b[^>]*href="(\/[^"]*)"[^>]*>/g)) {
+        const target = new URL(match[1], 'https://pilot.sautilink.com');
+        if (!match[0].includes('hreflang=')) assert.equal(target.searchParams.get('lang'), lang, match[1]);
+      }
+    }
   }
-  const english = renderHome({ username: 'sautilinkpilotbot', ready: true, lang: 'en' });
+  const english = renderHome({ username: 'sautilinkpilotbot', ready: true });
   assert.match(english, /https:\/\/t\.me\/sautilinkpilotbot\?startgroup=pilot/);
   assert.match(english, /Open the Pilot menu/);
   assert.doesNotMatch(english, /href="\/setup|BOT_TOKEN|SETUP_KEY|\/api\//);
@@ -384,12 +392,36 @@ test('English operator feedback preserves credential handling and key redaction'
   assert.equal(failure.elements.feedback.textContent, 'Invalid key [secret]');
 });
 
-test('unknown or untrusted locale values fall back to Swahili without reflection', () => {
+test('unknown or untrusted locale values default to English without reflection', () => {
   for (const lang of [undefined, 'fr', '\"><script>alert(1)</script>']) {
     for (const page of [renderHome({ lang }), renderPrivacy(lang), renderSetup(lang)]) {
-      assert.match(page, /<html lang="sw">/);
-      assert.match(page, /aria-label="Kiswahili" aria-current="page">SW<\/a>/);
+      assert.match(page, /<html lang="en">/);
+      assert.match(page, /aria-label="English" aria-current="page">EN<\/a>/);
       assert.doesNotMatch(page, /<script>alert\(1\)<\/script>|lang="fr"/);
     }
   }
+});
+
+
+test('public pages render the shared icon artwork before JavaScript and load motion from this Worker', () => {
+  for (const lang of ['en', 'sw']) {
+    for (const page of [renderHome({ lang }), renderPrivacy(lang), renderSetup(lang)]) {
+      const staticPage = page.replace(/<script\b[^>]*>[\s\S]*?<\/script>|<style>[\s\S]*?<\/style>/g, '');
+      assert.match(staticPage, /<body data-public-icons>/);
+      assert.match(staticPage, /data-public-icon-intro><svg[^>]+data-public-icon=/);
+      assert.match(staticPage, /class="global-links"[\s\S]*?class="public-icon public-icon--nav"/);
+      assert.match(staticPage, /class="site-footer"[\s\S]*?data-public-icon=/);
+      const scripts = [...page.matchAll(/<script\b[^>]*src="([^"]+)"[^>]*>/g)].map(match => match[0]);
+      assert.equal(scripts.length, 2);
+      assert.ok(scripts.every(script => /src="\/assets\/public-icons\//.test(script) && /\bdefer\b/.test(script)));
+      assert.doesNotMatch(staticPage, /orbit-svg|hero-visual/);
+    }
+  }
+  const home = renderHome({ ready: true, username: 'sautilinkpilotbot' });
+  for (const tone of ['idle', 'blocked', 'allowed']) assert.ok(home.includes(`outcome-symbol--${tone}`));
+  const h = simulatorHarness('en');
+  h.run();
+  assert.equal(h.elements['sim-run-label'].textContent, 'Show the next offense');
+  assert.equal(h.elements['sim-outcome'].dataset.tone, 'blocked');
+  assert.equal(h.requests(), 0);
 });

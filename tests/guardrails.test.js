@@ -133,12 +133,17 @@ test('a cancelled corrected incident cannot be resurrected by confirmation recov
   assert.equal((await f.store.member(GROUP,USER)).strikes,0);assert.equal((await f.store.incident(row.id)).status,'cancelled');
 });
 
-test('all announcement styles preserve penalty facts and custom placeholders remain plain text',()=>{
+test('all announcement styles preserve penalty facts, escaped custom text and the linked corporate footer in both languages',()=>{
   const row={user_id:String(USER),strike:2,until_date:START+7*86400,reasons:'["link","forward"]'};
-  for(const notice_template of ['detailed','compact','formal']) {
-    const result=formatAnnouncement(row,{chat:{id:GROUP,title:'<Group>'},from:{first_name:'<Juma>'}},true,'en',{notice_template,notice_en:'Please contact {group}, {user}. Reason: {reason}. Duration: {duration}.'});
-    assert.match(result.plain,/7 days/);assert.match(result.plain,/2\s*\/\s*3/);assert.match(result.plain,/EAT/);assert.match(result.plain,/forward/i);assert.match(result.plain,/link/i);
+  for(const language of ['sw','en']) for(const notice_template of ['detailed','compact','formal']) {
+    const result=formatAnnouncement(row,{chat:{id:GROUP,title:'<Group>'},from:{first_name:'<Juma>'}},true,language,{notice_template,[`notice_${language}`]:'Please contact {group}, {user}. Reason: {reason}. Duration: {duration}. <a href="https://example.com/">Custom text</a>'});
+    assert.match(result.plain,language==='en'?/7 days/:/Siku 7/);assert.match(result.plain,/2\s*\/\s*3/);assert.match(result.plain,/EAT/);assert.match(result.plain,/forward/i);assert.match(result.plain,/link/i);
     assert.match(result.rich,/&lt;Group&gt;/);assert.match(result.rich,/&lt;Juma&gt;/);
+    assert.doesNotMatch(result.rich,/<a href="https:\/\/example\.com\//);
+    assert.match(result.rich,/<i>SautiLink Pilot · <a href="https:\/\/www\.sautilink\.com\/">from SautiLink Corporation<\/a><\/i>$/);
+    assert.equal((result.rich.match(/<a href=/g)||[]).length,1,'only the trusted corporate footer becomes an HTML link');
+    assert.match(result.plain,/SautiLink Pilot · from SautiLink Corporation \(https:\/\/www\.sautilink\.com\/\)$/);
+    assert.doesNotMatch(result.rich,/Group lenye utulivu\.|Space for your community\./);
   }
 });
 

@@ -8,6 +8,7 @@ import {handleDashboardApi} from './dashboard-api.js';
 import {createGuardrailStore} from './guardrail-store.js';
 import {operationalHealth} from './monitoring.js';
 import {createOwnerAuth} from './owner-auth.js';
+import {iconAssetResponse} from './public-icons.js';
 
 const SECURITY_HEADERS={
   'X-Content-Type-Options':'nosniff',
@@ -71,8 +72,8 @@ function baseUrl(env) {
   return url.origin;
 }
 
-async function setup(request,env,lang='sw') {
-  const messages=SETUP_MESSAGES[lang==='en' ? 'en' : 'sw'];
+async function setup(request,env,lang='en') {
+  const messages=SETUP_MESSAGES[lang==='sw' ? 'sw' : 'en'];
   if(!await authorize(request,env)) return error(messages.authorization,401);
   const origin=request.headers.get('Origin');
   if(origin && origin!==baseUrl(env)) return error(messages.origin,403);
@@ -105,7 +106,7 @@ async function setup(request,env,lang='sw') {
 }
 
 async function pairOwner(request,env,lang) {
-  const messages=SETUP_MESSAGES[lang==='en' ? 'en' : 'sw'];
+  const messages=SETUP_MESSAGES[lang==='sw' ? 'sw' : 'en'];
   if(!await authorize(request,env)) return error(messages.authorization,401);
   const origin=request.headers.get('Origin');
   if(origin && origin!==baseUrl(env)) return error(messages.origin,403);
@@ -127,10 +128,12 @@ async function pairOwner(request,env,lang) {
 }
 
 export async function handleFetch(request,env,ctx) {
-  let lang='sw';
+  let lang='en';
   try {
+    const iconAsset=iconAssetResponse(request);
+    if(iconAsset) return iconAsset;
     const url=new URL(request.url),path=url.pathname;
-    lang=url.searchParams.get('lang')==='en' ? 'en' : 'sw';
+    lang=url.searchParams.get('lang')==='sw' ? 'sw' : 'en';
     if(request.method==='GET' && path==='/') return html(renderHome({...await publicState(env),lang}));
     if(request.method==='GET' && path==='/privacy') return html(renderPrivacy(lang));
     if(request.method==='GET' && path==='/app') return appHtml(renderDashboard({lang}));
