@@ -1,3 +1,5 @@
+import { ensureSchemaFamily } from './schema-ready.js';
+
 // Optional moderation keeps only identifiers, counters and delivery outcomes.
 // No message body, invite link or join-request bio is stored.
 export const GUARDRAIL_SCHEMA_SQL = `
@@ -31,8 +33,7 @@ CREATE INDEX IF NOT EXISTS pilot_admin_delivery_age ON pilot_admin_deliveries(at
 `;
 
 export function createGuardrailStore(db) {
-  let ready;
-  const ensure=()=>ready ||= db.batch(GUARDRAIL_SCHEMA_SQL.split(';').map(s=>s.trim()).filter(Boolean).map(sql=>db.prepare(sql))).catch(error=>{ready=null;throw error;});
+  const ensure=()=>ensureSchemaFamily(db, 'guards', GUARDRAIL_SCHEMA_SQL);
   const run=(sql,...args)=>db.prepare(sql).bind(...args).run();
   const first=(sql,...args)=>db.prepare(sql).bind(...args).first();
   const all=async(sql,...args)=>(await db.prepare(sql).bind(...args).all()).results || [];

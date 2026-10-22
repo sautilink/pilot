@@ -1,3 +1,5 @@
+import { ensureSchemaFamily } from './schema-ready.js';
+
 export const BROADCAST_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS pilot_broadcast_groups (
   chat_id TEXT PRIMARY KEY, status TEXT NOT NULL CHECK(status IN ('active','unknown','disconnected')),
   telegram_status TEXT, updated_at INTEGER NOT NULL DEFAULT 0, event_id INTEGER NOT NULL DEFAULT 0,
@@ -47,8 +49,7 @@ export function createBroadcastStore(db) {
   const first = (sql, ...values) => db.prepare(sql).bind(...values).first();
   const run = (sql, ...values) => db.prepare(sql).bind(...values).run();
   const all = async (sql, ...values) => (await db.prepare(sql).bind(...values).all()).results || [];
-  let initialized;
-  const ensure = () => initialized ||= db.batch(BROADCAST_SCHEMA_SQL.split(';').map(sql => sql.trim()).filter(Boolean).map(sql => db.prepare(sql))).catch(error => { initialized = null; throw error; });
+  const ensure = () => ensureSchemaFamily(db, 'broadcast', BROADCAST_SCHEMA_SQL);
   return {
     ensure, first, run, all,
     async rememberGroup(chat, at) {

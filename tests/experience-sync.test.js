@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { syncExperience, ALLOWED_UPDATES } from '../src/experience-sync.js';
+import { syncExperience, readExperienceState, ALLOWED_UPDATES } from '../src/experience-sync.js';
 import { EXPERIENCE_VERSION } from '../src/bot-ui.js';
 import { applySchema, createStore } from '../src/store.js';
 import { TelegramError } from '../src/telegram.js';
@@ -168,4 +168,19 @@ test('an expired lease can be recovered after a terminated Worker', async (t) =>
   f.advance(301);
   assert.equal((await f.sync()).status, 'synced');
   assert.equal(f.calls.length, 20);
+});
+
+test('a request-scoped settings snapshot is rechecked under the durable upgrade lease', async t => {
+  for (const [change, expected] of [
+    [{ experience_version: EXPERIENCE_VERSION }, 'current'],
+    [{ ready: '0' }, 'not_ready'],
+    [{ experience_sync_retry_at: START + 120 }, 'throttled'],
+  ]) {
+    const f = await fixture(t);
+    const state = await readExperienceState(f.db);
+    await f.store.settings(change);
+    assert.equal((await f.sync({ state })).status, expected);
+    assert.equal(f.calls.length, 0, 'stale snapshots cannot start Telegram metadata mutations');
+    assert.equal(await f.store.setting('experience_sync_lease_until'), null);
+  }
 });

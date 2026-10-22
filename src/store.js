@@ -2,6 +2,7 @@ import {CONTROL_SCHEMA_SQL} from './control-store.js';
 import {GUARDRAIL_SCHEMA_SQL} from './guardrail-store.js';
 import {OWNER_SCHEMA_SQL} from './owner-auth.js';
 import {BROADCAST_SCHEMA_SQL} from './broadcast-store.js';
+import {ensureSchemaFamily, applyCompleteSchema} from './schema-ready.js';
 
 // D1 is the source of truth; a Durable Object serializes each chat's actions.
 // Moderated message bodies, captions and Telegram tokens are never persisted.
@@ -48,16 +49,12 @@ CREATE TABLE IF NOT EXISTS processed_updates (
 CREATE INDEX IF NOT EXISTS processed_age ON processed_updates(processed_at);
 ` + EXPERIENCE_SCHEMA_SQL + CONTROL_SCHEMA_SQL + GUARDRAIL_SCHEMA_SQL + OWNER_SCHEMA_SQL + BROADCAST_SCHEMA_SQL;
 
-export async function applySchema(db) {
-  const statements = SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean);
-  await db.batch(statements.map(sql => db.prepare(sql)));
-}
+export const applySchema = db => applyCompleteSchema(db, SCHEMA_SQL);
 
 export function createStore(db) {
   const run = (sql, ...args) => db.prepare(sql).bind(...args).run();
   const first = (sql, ...args) => db.prepare(sql).bind(...args).first();
-  let extras;
-  const ensureExtras = () => extras ||= db.batch(EXPERIENCE_SCHEMA_SQL.split(';').map(s=>s.trim()).filter(Boolean).map(sql=>db.prepare(sql))).catch(error=>{ extras=null; throw error; });
+  const ensureExtras = () => ensureSchemaFamily(db, 'experience', EXPERIENCE_SCHEMA_SQL);
   return {
     run, first, ensureExtras,
     async setting(key) { return (await first('SELECT value FROM settings WHERE key = ?', key))?.value ?? null; },
@@ -69,12 +66,22 @@ export function createStore(db) {
     seen(id) { return first('SELECT update_id FROM processed_updates WHERE update_id = ?', id); },
     done(id, now) { return run('INSERT OR IGNORE INTO processed_updates VALUES(?,?)', id, now); },
     async group(chat) {
-      await run('INSERT OR IGNORE INTO groups(chat_id) VALUES(?)', String(chat));
-      return first('SELECT * FROM groups WHERE chat_id = ?', String(chat));
+      const existing=await first('SELECT * FROM groups WHERE chat_id = ?', String(chat));
+      if(existing) return existing;
+      const results=await db.batch([
+        db.prepare('INSERT OR IGNORE INTO groups(chat_id) VALUES(?)').bind(String(chat)),
+        db.prepare('SELECT * FROM groups WHERE chat_id = ?').bind(String(chat)),
+      ]);
+      return results[1].results[0];
     },
     async member(chat,user) {
-      await run('INSERT OR IGNORE INTO members(chat_id,user_id) VALUES(?,?)', String(chat),String(user));
-      return first('SELECT * FROM members WHERE chat_id=? AND user_id=?',String(chat),String(user));
+      const existing=await first('SELECT * FROM members WHERE chat_id=? AND user_id=?',String(chat),String(user));
+      if(existing) return existing;
+      const results=await db.batch([
+        db.prepare('INSERT OR IGNORE INTO members(chat_id,user_id) VALUES(?,?)').bind(String(chat),String(user)),
+        db.prepare('SELECT * FROM members WHERE chat_id=? AND user_id=?').bind(String(chat),String(user)),
+      ]);
+      return results[1].results[0];
     },
     incident(id) { return first('SELECT * FROM incidents WHERE id=?',id); },
     async plan(row) {

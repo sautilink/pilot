@@ -1,3 +1,5 @@
+import { ensureSchemaFamily } from './schema-ready.js';
+
 // A username is a pairing condition, never the persistent authorization key.
 // Only the protected operator setup can issue a one-use pairing capability.
 export const OWNER_USERNAME = 'drcharlestz';
@@ -28,9 +30,7 @@ async function digest(code) {
 }
 
 export function createOwnerAuth({ db, clock = () => Math.floor(Date.now() / 1000) }) {
-  let initialized;
-  const ensure = () => initialized ||= db.batch(OWNER_SCHEMA_SQL.split(';').map(sql => sql.trim()).filter(Boolean).map(sql => db.prepare(sql)))
-    .catch(error => { initialized = null; throw error; });
+  const ensure = () => ensureSchemaFamily(db, 'owner', OWNER_SCHEMA_SQL);
   const row = async () => { await ensure(); return db.prepare('SELECT * FROM pilot_owner WHERE singleton=1').first(); };
 
   return {

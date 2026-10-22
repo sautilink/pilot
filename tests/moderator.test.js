@@ -112,6 +112,23 @@ test('first violation removes the message, bans for 24 hours, then announces it'
   assert.match(f.api.callsOf('sendMessage')[0].params.text, /AMEFUNGIWA/i, 'group announcements default to Swahili');
 });
 
+test('ordinary-member moderation does not depend on unrelated linked-channel metadata', async t => {
+  const f = await fixture(t);
+  f.api.hooks.set('getChat', () => { throw new Error('group metadata temporarily unavailable'); });
+  await f.moderator.handle(f.message());
+  assert.equal(f.api.callsOf('getChat').length, 0);
+  assert.equal(f.api.callsOf('deleteMessage').length, 1);
+  assert.equal(f.api.callsOf('banChatMember').length, 1);
+});
+
+test('channel-sent violations still use the current linked-channel identity before deleting', async t => {
+  const f = await fixture(t);
+  f.api.chats.set(GROUP, { id: GROUP, type: 'supergroup', linked_chat_id: LINKED_CHANNEL });
+  await f.moderator.handle(f.message({ sender_chat: { id: LINKED_CHANNEL, type: 'channel' } }));
+  assert.equal(f.api.callsOf('getChat').length, 1);
+  assert.equal(f.api.callsOf('deleteMessage').length, 0);
+});
+
 test('repeat violations escalate to 7 days and permanent independently for each group', async (t) => {
   const f = await fixture(t);
   await f.moderator.handle(f.message());

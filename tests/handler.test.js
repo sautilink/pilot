@@ -32,7 +32,7 @@ async function fixture(t, { ready = false, identity = 'sautilinkpilotbot' } = {}
       get(id) {
         return { async fetch(url, options) {
           timeline.push('forward');
-          forwarded.push({ id, url, update: JSON.parse(options.body) });
+          forwarded.push({ id, url, update: JSON.parse(options.body), headers: new Headers(options.headers) });
           return Response.json({ status: 'confirmed' });
         } };
       },
@@ -383,4 +383,85 @@ test('join requests and their signed-owner callbacks use the same group coordina
   await handleFetch(post(callback),f.env);assert.deepEqual(f.selectedGroups,['-1001001','-1001001']);
   callback.callback_query.from.id=102;callback.callback_query.message.chat.id=102;callback.update_id++;
   await handleFetch(post(callback),f.env);assert.equal(f.selectedGroups.at(-1),'102','an unrelated person cannot select the group through another member’s callback');
+});
+
+test('a current webhook uses one settings request and observes readiness changes on the next update', async t => {
+  const f = await fixture(t, { ready: true });
+  const store = createStore(f.db);
+  await store.settings({ experience_version: EXPERIENCE_VERSION });
+  const prepared = [];
+  const prepare = f.db.prepare.bind(f.db);
+  f.db.prepare = sql => { prepared.push(sql); return prepare(sql); };
+  const post = () => request('/telegram/webhook', {
+    method: 'POST', headers: { 'X-Telegram-Bot-Api-Secret-Token': SECRET }, body: JSON.stringify(UPDATE),
+  });
+  assert.equal((await handleFetch(post(), f.env, f.ctx)).status, 200);
+  await f.flush();
+  assert.equal(prepared.length, 1, 'readiness and metadata share one database query');
+  assert.match(prepared[0], /SELECT key,value FROM settings/);
+  assert.equal(f.calls.length, 0, 'current menus need no Telegram metadata work');
+  await store.settings({ ready: '0' });
+  prepared.length = 0;
+  assert.equal((await handleFetch(post(), f.env, f.ctx)).status, 503);
+  assert.equal(prepared.length, 1);
+  assert.equal(f.forwarded.length, 1, 'no stale readiness cache may admit another update');
+});
+
+test('a slow empty menu acknowledgement does not hold up coordinator processing', async t => {
+  const f = await fixture(t, { ready: true });
+  await createStore(f.db).settings({ experience_version: EXPERIENCE_VERSION });
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const telegram = globalThis.fetch;
+  let acknowledgementStarted = false;
+  globalThis.fetch = async (url, options) => {
+    if (String(url).endsWith('/answerCallbackQuery')) {
+      acknowledgementStarted = true;
+      const params = JSON.parse(options.body);
+      assert.deepEqual(params, { callback_query_id: 'menu-speed' }, 'early ack carries no private text or success claim');
+      await gate;
+    }
+    return telegram(url, options);
+  };
+  const update = { update_id: 701, callback_query: {
+    id: 'menu-speed', data: 'pilot:admin', from: { id: 101 },
+    message: { date: 1792584000, message_id: 80, chat: { id: 101, type: 'private' }, from: { id: 900, is_bot: true } },
+  } };
+  let timer;
+  const timeout = new Promise(resolve => { timer = setTimeout(() => resolve(null), 1000); });
+  try {
+    const response = await Promise.race([handleFetch(request('/telegram/webhook', {
+      method: 'POST', headers: { 'X-Telegram-Bot-Api-Secret-Token': SECRET }, body: JSON.stringify(update),
+    }), f.env, f.ctx), timeout]);
+    assert.ok(response, 'Telegram acknowledgement must not block admission to the coordinator');
+    assert.equal(response.status, 200);
+    assert.equal(acknowledgementStarted, true);
+    assert.equal(f.forwarded[0].headers.get('X-Pilot-Callback-Acknowledgement'), 'started');
+    assert.deepEqual(f.forwarded[0].update, update, 'trusted context stays outside Telegram update JSON');
+  } finally {
+    clearTimeout(timer);
+    release();
+    await f.flush();
+  }
+  assert.equal(f.calls.filter(call => call.method === 'answerCallbackQuery').length, 1);
+});
+
+test('external acknowledgement markers cannot suppress handling and special callbacks retain their own response path', async t => {
+  const f = await fixture(t, { ready: true });
+  await createStore(f.db).settings({ experience_version: EXPERIENCE_VERSION });
+  for (const data of ['pilot:unknown', 'pilot:updates', 'pilot:broadcast:confirm:123']) {
+    const update = { update_id: 702, callback_query: {
+      id: 'special-callback', data, from: { id: 101 },
+      message: { date: 1792584000, message_id: 80, chat: { id: 101, type: 'private' } },
+    } };
+    const response = await handleFetch(request('/telegram/webhook', {
+      method: 'POST', headers: {
+        'X-Telegram-Bot-Api-Secret-Token': SECRET, 'X-Pilot-Callback-Acknowledgement': 'started',
+      }, body: JSON.stringify(update),
+    }), f.env, f.ctx);
+    assert.equal(response.status, 200);
+    assert.equal(f.forwarded.at(-1).headers.has('X-Pilot-Callback-Acknowledgement'), false);
+  }
+  await f.flush();
+  assert.equal(f.calls.length, 0);
 });

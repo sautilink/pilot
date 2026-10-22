@@ -10,6 +10,8 @@ import { createOwnerAuth } from './owner-auth.js';
 import { createBroadcastStore } from './broadcast-store.js';
 import { createBroadcastService } from './broadcast-service.js';
 import { routeBroadcast } from './broadcast-router.js';
+import { createBotIdentity } from './bot-identity.js';
+import { createRequestTiming, instrumentTelegram } from './request-timing.js';
 
 const BROADCAST_COORDINATOR='__pilot_broadcasts__';
 async function dispatch(env,name,path,payload) {
@@ -24,14 +26,30 @@ export class GroupCoordinator extends DurableObject {
   constructor(ctx,env) {
     super(ctx,env);
     this.tail=Promise.resolve();
-    this.api=createTelegram(env.BOT_TOKEN);
+    this.currentTiming=null;
+    this.api=instrumentTelegram(createTelegram(env.BOT_TOKEN),()=>this.currentTiming);
+    const getIdentity=createBotIdentity({db:env.DB,api:this.api,token:env.BOT_TOKEN,expectedUsername:env.BOT_USERNAME || 'sautilinkpilotbot'});
     this.owner=createOwnerAuth({db:env.DB});
     this.broadcasts=createBroadcastService({db:env.DB,api:this.api,owner:this.owner});
-    this.moderator=createModerator({db:env.DB,api:this.api,owner:this.owner,
+    this.moderator=createModerator({db:env.DB,api:this.api,owner:this.owner,getIdentity,
       appUrl:`${env.PUBLIC_BASE_URL || 'https://pilot.sautilink.com'}/app`,
       dispatchControl:payload=>dispatch(env,String(payload.chatId),'/control',payload),
       dispatchBroadcast:payload=>dispatch(env,BROADCAST_COORDINATOR,'/broadcast',payload),
     });
+  }
+  queued(route,work) {
+    const timing=createRequestTiming(route);
+    const task=this.tail.then(async()=>{
+      timing.start(); this.currentTiming=timing;
+      let outcome='error';
+      try {
+        const result=await work(); outcome=result?.retry ? 'retry' : 'ok'; return result;
+      } finally {
+        this.currentTiming=null; timing.finish(outcome);
+      }
+    });
+    this.tail=task.catch(()=>{});
+    return task;
   }
   async scheduleBroadcasts() {
     const next=await this.broadcasts.nextRunAt();
@@ -45,13 +63,11 @@ export class GroupCoordinator extends DurableObject {
   }
   async alarm() {
     // Alarm retries and incoming commands share the same serial decision stream.
-    const task=this.tail.then(async()=>{
+    return this.queued('broadcast_alarm',async()=>{
       // One target per alarm bounds D1/Telegram subrequests on the free plan.
       try {await this.broadcasts.drain({limit:1});}
       finally {await this.scheduleBroadcasts();}
     });
-    this.tail=task.catch(()=>{});
-    return task;
   }
   async fetch(request) {
     if(request.method!=='POST') return Response.json({ok:false,error:'method_not_allowed'},{status:405});
@@ -60,16 +76,17 @@ export class GroupCoordinator extends DurableObject {
     const isControl=path==='/control',isBroadcast=path==='/broadcast',isWake=path==='/broadcast/wake';
     // A Durable Object is single-threaded but awaits interleave; the explicit queue
     // keeps Telegram actions and D1 writes for a chat in one serial decision stream.
-    const task=this.tail.then(async()=>{
+    const callbackAcknowledgementStarted=path==='/telegram' && request.headers.get('X-Pilot-Callback-Acknowledgement')==='started';
+    const route=isControl ? 'control' : isBroadcast ? 'broadcast' : isWake ? 'broadcast_wake' : 'telegram';
+    const task=this.queued(route,async()=>{
       if(isWake) {await this.scheduleBroadcasts();return {ok:true};}
       if(isBroadcast) {
         const result=await routeBroadcast({owner:this.owner,service:this.broadcasts,payload:update});
         await this.scheduleBroadcasts();
         return result;
       }
-      return isControl ? this.moderator.controlMutation(update) : this.moderator.handle(update);
+      return isControl ? this.moderator.controlMutation(update) : this.moderator.handle(update,{callbackAcknowledgementStarted});
     });
-    this.tail=task.catch(()=>{});
     try {
       const result=await task;
       return Response.json(result,{status:result.retry ? 503 : 200});

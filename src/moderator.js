@@ -14,11 +14,11 @@ const validId = id => Number.isSafeInteger(Number(id)) && Number(id) !== 0;
 const userId = id => validId(id) && Number(id) > 0;
 const eventTime = m => Number(m.edit_date || m.date || 0);
 
-export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),dispatchControl,appUrl,owner,dispatchBroadcast}) {
+export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),dispatchControl,appUrl,owner,dispatchBroadcast,getIdentity}) {
   const store=createStore(db);
   const controlStore=createControlStore(db),control=createControlService({db,api,clock});
   let identity;
-  const me=async()=>identity ||= await api.call('getMe');
+  const me=async()=>identity ||= await (getIdentity ? getIdentity() : api.call('getMe'));
   const say=(chat,text,extra={})=>api.call('sendMessage',{
     chat_id:Number(chat),text,parse_mode:'HTML',link_preview_options:{is_disabled:true},...extra
   });
@@ -84,8 +84,10 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
     if(!group.enabled || time<Math.max(group.activated_at,activation)) return 'paused_or_old';
     const bot=await me();
     if(Number(message.from?.id)===Number(bot.id)) return 'self';
-    const info=await api.call('getChat',{chat_id:chat});
-    if(message.sender_chat && String(message.sender_chat.id)===String(info.linked_chat_id)) return 'linked_channel';
+    if(message.sender_chat) {
+      const info=await api.call('getChat',{chat_id:chat});
+      if(String(message.sender_chat.id)===String(info.linked_chat_id)) return 'linked_channel';
+    }
     const own=await member(chat,bot.id);
     if(!admin(own) || !own.can_delete_messages || !own.can_restrict_members) {
       await guards.records.health(chat,'missing_permissions',true,now);
@@ -185,12 +187,12 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
     return await announcer.notify(row,message) ? 'notification_pending' : 'confirmed';
   }
 
-  async function handle(update) {
+  async function handle(update,{callbackAcknowledgementStarted=false}={}) {
     if(!Number.isSafeInteger(update?.update_id)) return {status:'ignored'};
     if(await store.seen(update.update_id)) return {status:'duplicate'};
     let status='ignored';
     if(update.callback_query) {
-      if(!await guards.callback(update.callback_query)) await experience.handleCallback(update.callback_query,update.update_id);
+      if(!await guards.callback(update.callback_query)) await experience.handleCallback(update.callback_query,update.update_id,{updateChecked:true,callbackAcknowledgementStarted});
       status='callback';
     } else if(update.chat_join_request) {
       const request=update.chat_join_request;
@@ -229,7 +231,7 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
           }
         }
         if(optionalAction) status=optionalAction;
-        else if(update.message && !groupViolation && await experience.handleCommand(message,update.update_id)) status='command';
+        else if(update.message && !groupViolation && await experience.handleCommand(message,update.update_id,{updateChecked:true})) status='command';
         else status=await enforce(message,update,rules);
       }
     }

@@ -7,6 +7,22 @@ Telegram moderation for any eligible group, with a bilingual Telegram Mini App, 
 - **Worker:** `sautilink-pilot`
 - **Repository:** https://github.com/sautilink/pilot
 
+## Shared SautiLink interface
+
+The public site, setup and privacy pages, and Telegram Mini App use the same visual language as SautiLink Router: Inter, the official SautiLink logo, neutral grouped surfaces, rounded cards and restrained blue actions. The public home puts the group connection steps on the first screen. Swahili and English share the same layout, including narrow mobile screens.
+
+Appearance follows Telegram or the device preference unless the visitor chooses light or dark. An explicit choice travels in a `theme` URL parameter; Pilot does not store it in browser storage or copy Telegram launch credentials into navigation links. The public site remains informational, while group data and administrative actions require the verified Telegram identity described below.
+
+## Response path and performance
+
+Each authenticated webhook reads readiness and experience metadata in one fresh D1 snapshot. Commands reuse the moderator's durable replay check; direct command handlers still check replays themselves. Recognized ordinary menu buttons start an empty Telegram acknowledgement before waiting for the group coordinator, while authorization and any requested action still run inside the normal checked path. Owner announcements and join challenges retain their separate callback handling.
+
+Schema-family versions are persisted so a new coordinator can reuse an already prepared database without replaying table creation. Existing group/member records use a read without an unnecessary insert. Verified bot identity can be reused across coordinators sharing a database binding and token; member roles, permissions, readiness and administrator decisions are not served from that identity cache. Ordinary user violations also avoid the channel lookup needed only for messages sent on behalf of a chat.
+
+Local before/after profiling used the same real SQLite database interface and mocked Telegram responses. For repeated private `/start`, D1 binding calls before the first reply fell from **8 to 4**; `/help` fell from **7 to 3**. These are operation counts, not measured Telegram delivery times or a production speed guarantee. Destructive decisions retain fresh role checks and the per-group serial queue.
+
+Worker logs include `pilot_performance` records for a 2% sample of ordinary work and for slow or failed coordinator work. Records contain only bounded route/outcome categories, queue time, handling time, and Telegram call counts/time. They exclude tokens, message content, parameters, and raw chat/user/update identifiers. `handling_ms` includes all processing waits; subtracting Telegram time does not turn it into a database-only measurement. These records help distinguish waiting in a group's queue from external API waits when investigating future delays.
+
 ## Policy
 
 An ordinary member's prohibited link or forwarded message is deleted before a ban is requested. Offenses are counted independently for `(group ID, user ID)`:

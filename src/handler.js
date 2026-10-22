@@ -1,7 +1,8 @@
 import { applySchema, createStore } from './store.js';
 import { createTelegram, secureEqual, webhookSecret } from './telegram.js';
 import { renderHome, renderSetup, renderPrivacy } from './pages.js';
-import { isExpectedBot, syncExperience } from './experience-sync.js';
+import { isExpectedBot, readExperienceState, syncExperience } from './experience-sync.js';
+import { isMenuCallback } from './commands.js';
 import {renderDashboard} from './dashboard.js';
 import {handleDashboardApi} from './dashboard-api.js';
 import {createGuardrailStore} from './guardrail-store.js';
@@ -53,8 +54,8 @@ const SETUP_MESSAGES={
 
 async function publicState(env) {
   try {
-    const store=createStore(env.DB);
-    return {ready:validToken(env.BOT_TOKEN) && Boolean(env.GROUPS) && await store.setting('ready')==='1',username:await store.setting('bot_username')};
+    const state=await readExperienceState(env.DB);
+    return {ready:validToken(env.BOT_TOKEN) && Boolean(env.GROUPS) && state.ready,username:state.username};
   } catch { return {ready:false,username:env.BOT_USERNAME || null}; }
 }
 
@@ -149,7 +150,8 @@ export async function handleFetch(request,env,ctx) {
     if(new TextEncoder().encode(body).byteLength>1048576) return error('Ombi ni kubwa sana.',413);
     let update; try { update=JSON.parse(body); } catch { return error('JSON si sahihi.',400); }
     if(!Number.isSafeInteger(update?.update_id)) return error('Update si sahihi.',400);
-    if(!(await publicState(env)).ready) return error('Kamilisha setup kwanza.',503);
+    const state=await readExperienceState(env.DB);
+    if(!state.ready) return error('Kamilisha setup kwanza.',503);
     const event=update.message || update.edited_message || update.my_chat_member || update.chat_member || update.chat_join_request;
     const callback=update.callback_query;
     const accessibleCallbackChat=callback?.message?.date!==0 && Number.isSafeInteger(callback?.message?.chat?.id);
@@ -163,6 +165,15 @@ export async function handleFetch(request,env,ctx) {
       if(join && join.user_id===String(callback.from.id)) chatId=Number(join.chat_id);
     }
     if(!Number.isSafeInteger(chatId) || chatId===0 || (callback && !accessibleCallbackChat && chatId<0)) return response({ok:true});
+    let callbackAcknowledgementStarted=false;
+    if(typeof ctx?.waitUntil==='function' && isMenuCallback(callback) && Number.isSafeInteger(callback.from?.id) && callback.from.id>0) {
+      // Empty acknowledgements disclose no data and grant no authority. Starting
+      // one here lets the spinner stop while the chat coordinator does its work.
+      // The internal header is created here, never copied from an incoming one.
+      const acknowledgement=createTelegram(env.BOT_TOKEN).call('answerCallbackQuery',{callback_query_id:callback.id}).catch(()=>{});
+      try {ctx.waitUntil(acknowledgement);} catch {await acknowledgement;}
+      callbackAcknowledgementStarted=true;
+    }
     // Upgrade metadata only on authenticated, valid updates for an already-ready
     // installation. Public GETs and failed authentication cannot mutate Telegram.
     // Await callback subscription first; profile/menu updates finish in waitUntil.
@@ -171,6 +182,7 @@ export async function handleFetch(request,env,ctx) {
         await syncExperience({
           db:env.DB,token:env.BOT_TOKEN,webhookUrl:`${baseUrl(env)}/telegram/webhook`,
           expectedUsername:env.BOT_USERNAME || 'sautilinkpilotbot',
+          state,
           waitUntil:promise=>ctx.waitUntil(promise),
         });
       } catch {
@@ -181,7 +193,7 @@ export async function handleFetch(request,env,ctx) {
     // Same group -> same object. Its queue protects strikes across network awaits.
     const id=env.GROUPS.idFromName(String(chatId));
     const result=await env.GROUPS.get(id).fetch('https://internal/telegram',{
-      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(update)
+      method:'POST',headers:{'Content-Type':'application/json',...(callbackAcknowledgementStarted?{'X-Pilot-Callback-Acknowledgement':'started'}:{})},body:JSON.stringify(update)
     });
     return response({ok:result.ok},result.ok ? 200 : 503);
   } catch(errorValue) {

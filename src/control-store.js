@@ -1,4 +1,5 @@
 import { normalizeCommandExceptions } from './command-spam.js';
+import { ensureSchemaFamily } from './schema-ready.js';
 
 export const CONTROL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS pilot_group_settings (
@@ -71,8 +72,7 @@ export function createControlStore(db) {
   const first = (sql, ...values) => db.prepare(sql).bind(...values).first();
   const run = (sql, ...values) => db.prepare(sql).bind(...values).run();
   const all = async (sql, ...values) => (await db.prepare(sql).bind(...values).all()).results || [];
-  let initialized;
-  const ensure = () => initialized ||= db.batch(CONTROL_SCHEMA_SQL.split(';').map(sql => sql.trim()).filter(Boolean).map(sql => db.prepare(sql))).catch(error => { initialized = null; throw error; });
+  const ensure = () => ensureSchemaFamily(db, 'control', CONTROL_SCHEMA_SQL);
   return {
     ensure, first, run, all,
     async settings(chat) {

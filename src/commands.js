@@ -13,6 +13,12 @@ const pages = { start: 'home', pilot: 'home', help: 'help', about: 'about', howi
 const publicStartPages = new Set(['home', 'about', 'how', 'rules', 'connect', 'developer', 'help', 'language']);
 const callbackPages = new Set(['home', 'about', 'how', 'rules', 'connect', 'developer', 'help', 'admin', 'status', 'language', ...FEATURE_COMMANDS]);
 
+export function isMenuCallback(query) {
+  if (typeof query?.id !== 'string' || !query.id || query.id.length > 256) return false;
+  const match = String(query.data || '').match(/^pilot:([a-z]+)(?::(sw|en))?$/);
+  return Boolean(match && (match[1] === 'lang' ? match[2] : !match[2] && callbackPages.has(match[1])));
+}
+
 const copy = {
   sw: {
     openPanel: '🛡 Fungua paneli ya faragha', openPilot: '✦ Fungua Pilot', privateHelp: '❔ Msaada faraghani',
@@ -247,13 +253,13 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     return renderBotPage(page, view);
   }
 
-  async function handleCommand(message, updateId) {
+  async function handleCommand(message, updateId, { updateChecked = false } = {}) {
     if (await broadcasts.handleMessage(message, updateId)) return true;
     const match = String(message.text || '').match(commandPattern);
     if (!match) return false;
     const bot = await identity(), command = match[1].toLowerCase(), argument = match[3]?.trim();
     if (match[2] && match[2].toLowerCase() !== String(bot.username).toLowerCase()) return true;
-    if (Number.isSafeInteger(updateId) && await store.seen(updateId)) return true;
+    if (updateChecked !== true && Number.isSafeInteger(updateId) && await store.seen(updateId)) return true;
     let language = message.chat.type === 'private' && peer(message)
       ? await userLanguage(message.from) : await groupLanguage(message.chat.id);
 
@@ -422,15 +428,17 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     return true;
   }
 
-  async function handleCallback(query, updateId) {
+  async function handleCallback(query, updateId, { updateChecked = false, callbackAcknowledgementStarted = false } = {}) {
     if (await broadcasts.handleCallback(query, updateId)) return true;
     const match = String(query?.data || '').match(/^pilot:([a-z]+)(?::(sw|en))?$/);
-    if (!match || (match[1] === 'lang' ? !match[2] : match[2] || !callbackPages.has(match[1]))) return false;
+    if (!isMenuCallback(query)) return false;
     // Stop Telegram's spinner before any group authorization/network lookup.
-    try { await api.call('answerCallbackQuery', { callback_query_id: query.id }); } catch { /* Expired callbacks disclose nothing. */ }
+    if (callbackAcknowledgementStarted !== true) {
+      try { await api.call('answerCallbackQuery', { callback_query_id: query.id }); } catch { /* Expired callbacks disclose nothing. */ }
+    }
     const message = query.message;
     if (!message?.chat || !userId(query.from?.id)) return true;
-    if (Number.isSafeInteger(updateId) && await store.seen(updateId)) return true;
+    if (updateChecked !== true && Number.isSafeInteger(updateId) && await store.seen(updateId)) return true;
     const bot = await identity();
     if (message.from && Number(message.from.id) !== Number(bot.id)) return true;
     if (isGroup(message.chat)) {

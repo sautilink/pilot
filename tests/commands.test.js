@@ -519,3 +519,33 @@ test('unrecognized commands and commands directed to another bot cause no replie
   assert.equal(sent(f).length, 0);
   assert.equal((await f.store.first('SELECT COUNT(*) AS count FROM groups')).count, 0);
 });
+
+test('trusted update admission avoids a duplicate lookup while standalone handlers still honor durable deduplication', async t => {
+  const f = await fixture(t);
+  const seen = f.store.seen;
+  let lookups = 0;
+  f.store.seen = async id => { lookups++; return seen(id); };
+  await f.experience.handleCommand(privateMessage('/help'), 901, { updateChecked: true });
+  assert.equal(lookups, 0);
+  assert.equal(sent(f).length, 1);
+  await f.store.done(902, NOW);
+  await f.experience.handleCommand(privateMessage('/help'), 902);
+  assert.equal(lookups, 1);
+  assert.equal(sent(f).length, 1, 'a replay through a standalone handler still cannot send');
+});
+
+test('early callback acknowledgement does not replace fresh admin checks or disclose another private chat', async t => {
+  const f = await fixture(t);
+  const admitted = { updateChecked: true, callbackAcknowledgementStarted: true };
+  await f.store.setAdminContext(USER, GROUP, NOW);
+  await f.experience.handleCallback(callback('pilot:status'), 903, admitted);
+  assert.equal(f.api.callsOf('answerCallbackQuery').length, 0, 'the admission path already owns the empty acknowledgement');
+  assert.equal(f.api.callsOf('getChatMember').length, 1);
+  assert.equal(f.api.callsOf('getChat').length, 0);
+  assert.doesNotMatch(f.api.callsOf('editMessageText').at(-1).params.text, /Private|Moderation|Matangazo/);
+  const edits = f.api.callsOf('editMessageText').length;
+  await f.experience.handleCallback(callback('pilot:status', USER, {
+    message: { message_id: 55, chat: { id: ADMIN, type: 'private' }, from: identity },
+  }), 904, admitted);
+  assert.equal(f.api.callsOf('editMessageText').length, edits);
+});
