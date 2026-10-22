@@ -3,8 +3,9 @@
 const TELEGRAM_HANDLES = new Set([
   "techhubtz",
   "sautilink",
-  "sautilink_cloud",
+  "sautilinkcloud_bot",
   "drcharlesofficial",
+  "drcharlestz",
 ]);
 
 const LEGACY_FORWARD_FIELDS = [

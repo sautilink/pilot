@@ -237,3 +237,16 @@ test('English visitor presentation preserves the group’s saved Swahili languag
   assert.equal(mutation.body.input.language, 'sw');
   assert.equal(mutation.options.headers.Authorization, 'tma public-test-init-data');
 });
+
+test('base allowlist displays the current approved Telegram links in both languages', async () => {
+  for (const language of ['sw', 'en']) {
+    const h = await settingsHarness(language, {}, { url: `https://pilot.sautilink.com/app?tab=links&group=-1001001&lang=${language}` });
+    const baseline = h.nodes().find(node => node.className === 'baseline');
+    assert.deepEqual(baseline.children.map(node => node.textContent), [
+      'sautilink.com', '*.sautilink.com', 't.me/techhubtz', 't.me/sautilink',
+      't.me/sautilinkcloud_bot', 't.me/drcharlesofficial', 't.me/drcharlestz',
+    ]);
+    assert.match(h.content.textContent, language === 'en' ? /approved Telegram links/ : /links za Telegram zilizoidhinishwa/);
+    assert.doesNotMatch(h.content.textContent, /sautilink_cloud|approved channels|channels zilizoidhinishwa/);
+  }
+});

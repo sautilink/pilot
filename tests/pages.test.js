@@ -10,6 +10,9 @@ test('public pages explain silent command deletion and the stored admin exceptio
     assert.match(home, lang === 'en' ? /Command spam/ : /Spam ya commands/);
     assert.match(home, lang === 'en' ? /without a ban, mute or strike/ : /bila ban, mute wala kosa/);
     assert.match(home, lang === 'en' ? /admins can add exceptions or turn it off/ : /admin anaweza kuweka exceptions au kukizima/);
+    for (const username of ['techhubtz', 'sautilink', 'sautilinkcloud_bot', 'drcharlesofficial', 'drcharlestz']) assert.ok(home.includes(`href="https://t.me/${username}"`), username);
+    assert.equal([...home.matchAll(/class="channel-link"/g)].length, 5);
+    assert.doesNotMatch(home, /sautilink_cloud|these Telegram channel links|links za channels hizi/);
     const privacy = renderPrivacy(lang);
     assert.match(privacy, lang === 'en' ? /command exceptions/ : /exceptions za commands/);
     assert.match(privacy, lang === 'en' ? /without retaining the deleted code/ : /bila kuhifadhi code iliyoondolewa/);

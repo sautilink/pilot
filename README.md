@@ -42,8 +42,8 @@ Group owners, administrators (including anonymous administrators), and messages 
 Allowed HTTPS destinations:
 
 - `sautilink.com` and every real subdomain under `.sautilink.com`, all paths.
-- `t.me/techhubtz`, `t.me/sautilink`, `t.me/sautilink_cloud`, `t.me/drcharlesofficial`.
-- Public post links and `/s/` previews for those four Telegram usernames.
+- `t.me/techhubtz`, `t.me/sautilink`, `t.me/sautilinkcloud_bot`, `t.me/drcharlesofficial`, `t.me/drcharlestz`.
+- Public post links and `/s/` previews for those five Telegram usernames.
 
 Bare domains are interpreted as HTTPS. Actual destinations of hidden links, captions, inline keyboard URLs and poll text are checked. Allowed links do not exempt forwarded messages. A message containing both an allowed and a forbidden destination violates the rule. Similar-looking domains, credentials in a URL, unsupported schemes/ports and Telegram username prefix matches are not whitelisted.
 

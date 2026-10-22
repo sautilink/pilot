@@ -11,13 +11,21 @@ test("whitelist accepts HTTPS SautiLink hosts and normal paths", () => {
   ]) assert.equal(isAllowedUrl(url), true, url);
 });
 
-test("whitelist accepts only the four Telegram destinations and their posts", () => {
-  for (const handle of ["techhubtz", "sautilink", "sautilink_cloud", "drcharlesofficial"]) {
+test("whitelist accepts the approved Telegram destinations, posts and bot deep links", () => {
+  for (const handle of ["techhubtz", "sautilink", "sautilinkcloud_bot", "drcharlesofficial", "drcharlestz"]) {
     for (const path of [`/${handle}`, `/${handle}/`, `/${handle}/123`, `/s/${handle}`, `/s/${handle}/123/`]) {
       assert.equal(isAllowedUrl(`https://t.me${path}`), true, path);
     }
   }
   assert.equal(isAllowedUrl("t.me/SAUTILINK/123?single#photo"), true);
+  for (const url of [
+    "https://t.me/sautilinkcloud_bot?start=pilot",
+    "https://t.me/sautilinkcloud_bot/?start=cloud_2026-10",
+    "t.me/SAUTILINKCLOUD_BOT?start=welcome",
+  ]) {
+    assert.equal(isAllowedUrl(url), true, url);
+    assert.deepEqual(analyzeMessage({ text: url }), { reasons: [], blockedLinks: [] });
+  }
 });
 
 test("whitelist rejects lookalike hosts, credentials, unsupported ports and protocols", () => {
@@ -34,12 +42,19 @@ test("whitelist rejects lookalike hosts, credentials, unsupported ports and prot
 });
 
 test("Telegram allowlist does not expand through suffixes, extra paths or encoded routes", () => {
+  // Intentional regression: this former destination was replaced, not retained.
+  assert.equal(isAllowedUrl("https://t.me/sautilink_cloud"), false);
   for (const url of [
     "https://t.me/other", "https://t.me/sautilink_scams", "https://t.me/sautilinkevil", "https://t.me/sautilink.com",
     "https://t.me/sautilink/abc", "https://t.me/sautilink/123/456", "https://t.me/sautilink//",
     "https://t.me/sautilink/../other", "https://t.me/other/../sautilink", "https://t.me/%73autilink",
     "https://t.me/sautilink%2f123", "https://t.me/s/sautilink/123/extra", "https://t.me/share?url=https://sautilink.com",
     "https://t.me/+sautilink", "https://t.me/joinchat/sautilink", "https://www.t.me/sautilink", "https://t.me.evil.test/sautilink",
+    "https://t.me/sautilinkcloud_bot_extra?start=pilot", "https://t.me/sautilinkcloud_b0t",
+    "https://t.me/sautilinkcloud_bot/start", "https://t.me/%73autilinkcloud_bot?start=pilot",
+    "https://t.me/sautilinkcloud_bot%2f123", "https://t.me.evil.test/sautilinkcloud_bot?start=pilot",
+    "https://t.me/drcharlestz_extra", "https://t.me/drcharlestz/other", "https://t.me/other/../drcharlestz",
+    "https://www.t.me/drcharlestz", "https://t.me@evil.test/drcharlestz",
   ]) assert.equal(isAllowedUrl(url), false, url);
 });
 
@@ -194,6 +209,13 @@ test('custom whitelist rejects ambiguous hosts, Unicode lookalikes and malformed
 test('checker explains base and group matches without overriding forwarding policy', () => {
   const rules = [{ id: 'group-rule', kind: 'domain', value: 'example.com' }];
   assert.equal(explainUrl('https://sautilink.com', rules).source, 'base');
+  for (const text of ['https://t.me/sautilinkcloud_bot?start=pilot', 'https://t.me/drcharlestz']) {
+    const checked = explainUrl(text, rules);
+    assert.equal(checked.allowed, true);
+    assert.equal(checked.source, 'base');
+    assert.equal(checked.reason, 'base_telegram');
+    assert.deepEqual(analyzeMessage({ text, forward_origin: { type: 'hidden_user' } }, rules), { reasons: ['forward'], blockedLinks: [] });
+  }
   const group = explainUrl('https://example.com/path', rules);
   assert.equal(group.allowed, true);
   assert.equal(group.reason, 'group_domain');

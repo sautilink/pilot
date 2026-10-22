@@ -169,15 +169,19 @@ test('anonymous administrators and the actual linked channel are exempt', async 
   assert.equal(f.api.callsOf('banChatMember').length, 0);
 });
 
-test('approved link is allowed, but a forwarded message containing it is still moderated', async (t) => {
-  const f = await fixture(t);
-  await f.moderator.handle(f.message({ text: 'https://sautilink.com/news' }));
-  assert.equal(f.api.callsOf('banChatMember').length, 0);
-  await f.moderator.handle(f.message({
-    text: 'https://sautilink.com/news',
-    forward_origin: { type: 'user', date: START - 1, sender_user: { id: 200, first_name: 'Origin' } },
-  }));
-  assert.equal(f.api.callsOf('banChatMember').length, 1);
+test('approved website, Cloud bot and profile links are allowed directly but forwards remain moderated', async (t) => {
+  for (const text of ['https://sautilink.com/news', 'https://t.me/sautilinkcloud_bot?start=pilot', 'https://t.me/drcharlestz']) {
+    const f = await fixture(t);
+    await f.moderator.handle(f.message({ text }));
+    assert.equal(f.api.callsOf('deleteMessage').length, 0);
+    assert.equal(f.api.callsOf('banChatMember').length, 0);
+    await f.moderator.handle(f.message({
+      text,
+      forward_origin: { type: 'user', date: START - 1, sender_user: { id: 200, first_name: 'Origin' } },
+    }));
+    assert.equal(f.api.callsOf('banChatMember').length, 1);
+    assert.deepEqual(JSON.parse((await f.db.prepare('SELECT reasons FROM incidents').first()).reasons), ['forward']);
+  }
 });
 
 test('duplicate webhook deliveries do not apply the ban or announcement twice', async (t) => {

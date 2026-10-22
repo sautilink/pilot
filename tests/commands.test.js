@@ -88,6 +88,11 @@ test('each public command has a useful private page in both languages', async t 
       const reply = sent(f).at(-1).params;
       assert.equal(reply.text, renderBotPage(page, { language, username: identity.username, firstName: 'Juma' }).text);
       assert.doesNotMatch(reply.text, sensitive);
+      if (page === 'rules') {
+        assert.match(reply.text, /t\.me\/sautilinkcloud_bot<\/b>/);
+        assert.match(reply.text, /t\.me\/drcharlestz<\/b>/);
+        assert.doesNotMatch(reply.text, /t\.me\/sautilink_cloud\b/);
+      }
       assert.ok(reply.reply_markup.inline_keyboard.length > 0);
     }
   }
