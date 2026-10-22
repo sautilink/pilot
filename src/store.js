@@ -1,3 +1,6 @@
+import {CONTROL_SCHEMA_SQL} from './control-store.js';
+import {GUARDRAIL_SCHEMA_SQL} from './guardrail-store.js';
+
 // D1 is the source of truth; a Durable Object serializes each chat's actions.
 // Message bodies, captions, links and Telegram tokens are never persisted here.
 export const EXPERIENCE_SCHEMA_SQL = `
@@ -41,7 +44,7 @@ CREATE TABLE IF NOT EXISTS processed_updates (
   update_id INTEGER PRIMARY KEY, processed_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS processed_age ON processed_updates(processed_at);
-` + EXPERIENCE_SCHEMA_SQL;
+` + EXPERIENCE_SCHEMA_SQL + CONTROL_SCHEMA_SQL + GUARDRAIL_SCHEMA_SQL;
 
 export async function applySchema(db) {
   const statements = SCHEMA_SQL.split(';').map(s => s.trim()).filter(Boolean);
@@ -80,9 +83,9 @@ export function createStore(db) {
     status(id,status) { return run('UPDATE incidents SET status=? WHERE id=?',status,id); },
     async confirm(row,now) {
       await db.batch([
-        db.prepare("UPDATE members SET strikes=MAX(strikes,?),last_incident=?,active_until=?,episode_at=? WHERE chat_id=? AND user_id=? AND override_at < ?")
-          .bind(row.strike,row.id,row.until_date || -1,row.event_at,String(row.chat_id),String(row.user_id),row.event_at),
-        db.prepare("UPDATE incidents SET status='confirmed' WHERE id=?").bind(row.id)
+        db.prepare("UPDATE members SET strikes=MAX(strikes,?),last_incident=?,active_until=?,episode_at=? WHERE chat_id=? AND user_id=? AND override_at < ? AND EXISTS(SELECT 1 FROM incidents WHERE id=? AND status!='cancelled')")
+          .bind(row.strike,row.id,row.until_date || -1,row.event_at,String(row.chat_id),String(row.user_id),row.event_at,row.id),
+        db.prepare("UPDATE incidents SET status='confirmed' WHERE id=? AND status!='cancelled' AND EXISTS(SELECT 1 FROM members WHERE chat_id=? AND user_id=? AND override_at<?)").bind(row.id,String(row.chat_id),String(row.user_id),row.event_at)
       ]);
     },
     async override(chat,user,at,reset=false,updateId=null) {

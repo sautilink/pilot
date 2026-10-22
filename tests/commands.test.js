@@ -301,6 +301,21 @@ test('unban is claimed before Telegram and is never blindly repeated after an am
   assert.doesNotMatch(sent(f)[0].params.text, /secret/);
 });
 
+test('unban requires a true Telegram result before clearing local ban state or claiming success', async t => {
+  const f = await fixture(t);
+  await f.store.member(GROUP, TARGET);
+  await f.store.run('UPDATE members SET strikes=2,active_until=?,episode_at=? WHERE chat_id=? AND user_id=?', NOW + 86400, NOW - 10, String(GROUP), String(TARGET));
+  f.api.hooks.set('unbanChatMember', () => false);
+  await f.command(groupMessage(`/unban ${TARGET}`), 78);
+  await f.command(groupMessage(`/unban ${TARGET}`), 78);
+  const state = await f.store.member(GROUP, TARGET);
+  assert.equal(state.active_until, NOW + 86400);
+  assert.equal(state.strikes, 2);
+  assert.equal(f.api.callsOf('unbanChatMember').length, 1);
+  assert.match(sent(f)[0].params.text, /hakujathibitishwa/);
+  assert.doesNotMatch(sent(f)[0].params.text, /Ban imeondolewa/);
+});
+
 test('forgive stays scoped to its group, while pause and resume atomically mark their updates', async t => {
   const f = await fixture(t);
   await f.store.member(GROUP, TARGET);
@@ -349,6 +364,16 @@ test('testnotice sends one clearly labelled group demo, no punishment, and a pri
   assert.equal((await f.store.member(GROUP, TARGET)).strikes, 2);
   assert.equal(f.api.callsOf('banChatMember').length, 0);
   assert.equal(f.api.callsOf('deleteMessage').length, 0);
+});
+
+test('testnotice does not claim delivery without a Telegram message ID', async t => {
+  const f = await fixture(t);
+  f.api.hooks.set('sendMessage', params => params.chat_id === GROUP ? true : { message_id: 99 });
+  await f.command(groupMessage('/testnotice'), 91);
+  await f.command(groupMessage('/testnotice'), 91);
+  assert.equal(sent(f).filter(call => call.params.chat_id === GROUP).length, 1);
+  assert.match(sent(f).at(-1).params.text, /hakujathibitishwa/);
+  assert.doesNotMatch(sent(f).at(-1).params.text, /Tangazo la majaribio limetumwa/);
 });
 
 test('private callback navigation acknowledges promptly, edits in place, and supports every page in both languages', async t => {

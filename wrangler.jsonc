@@ -19,6 +19,6 @@
     "bindings": [{ "name": "GROUPS", "class_name": "GroupCoordinator" }]
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GroupCoordinator"] }],
-  "triggers": { "crons": ["17 2 * * *"] },
+  "triggers": { "crons": ["*/10 * * * *", "17 2 * * *"] },
   "observability": { "enabled": true }
 }

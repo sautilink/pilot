@@ -5,6 +5,7 @@ import { handleFetch } from '../src/handler.js';
 import { applySchema, createStore } from '../src/store.js';
 import { TestD1 } from './helpers/d1.js';
 import { EXPERIENCE_VERSION } from '../src/bot-ui.js';
+import {createGuardrailStore} from '../src/guardrail-store.js';
 
 // Public fixtures only. These are not usable Telegram or Cloudflare credentials.
 const TOKEN = `900:${'test_only_'.repeat(4)}`;
@@ -140,7 +141,7 @@ test('successful setup creates durable state, subscribes to membership updates, 
   const webhook = f.calls.find(call => call.method === 'setWebhook');
   assert.equal(webhook.params.secret_token, SECRET);
   assert.equal(webhook.params.url, `${BASE}/telegram/webhook`);
-  assert.deepEqual(webhook.params.allowed_updates, ['message', 'edited_message', 'my_chat_member', 'chat_member', 'callback_query']);
+  assert.deepEqual(webhook.params.allowed_updates, ['message', 'edited_message', 'my_chat_member', 'chat_member', 'callback_query', 'chat_join_request']);
   assert.equal(webhook.params.drop_pending_updates, false);
   const store = createStore(f.db);
   assert.equal(await store.setting('ready'), '1');
@@ -319,4 +320,26 @@ test('English setup returns localized authentication, readiness, and success fee
   const success = await handleFetch(setupRequest({ lang: 'en' }), f.env);
   assert.equal(success.status, 200);
   assert.match((await success.json()).status, /connected to Telegram/);
+});
+
+test('Mini App can be framed by Telegram while public pages retain their framing restriction',async t=>{
+  const f=await fixture(t,{ready:true});const app=await handleFetch(request('/app?lang=en'),f.env);
+  assert.equal(app.status,200);assert.equal(app.headers.get('X-Frame-Options'),null);
+  assert.match(app.headers.get('Content-Security-Policy'),/frame-ancestors https:\/\/web\.telegram\.org/);
+  const body=await app.text();assert.match(body,/telegram-web-app\.js/);assert.match(body,/<html lang="en"/);assert.ok(!body.includes(TOKEN));
+  const denied=await handleFetch(request('/api/pilot',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"view":"groups"}'}),f.env);
+  assert.equal(denied.status,401);assert.equal(f.forwarded.length,0);
+});
+
+test('join requests and their signed-owner callbacks use the same group coordinator',async t=>{
+  const f=await fixture(t,{ready:true});const guards=createGuardrailStore(f.db);await guards.ensure();
+  const joinId='0123456789abcdef01234567';
+  await guards.run("INSERT INTO pilot_join_requests(id,chat_id,user_id,user_chat_id,event_at,expires_at,status,updated_at) VALUES(?,?,?,?,?,?,'challenged',?)",joinId,'-1001001','101','101',1792584000,1792584290,1792584000);
+  const post=update=>request('/telegram/webhook',{method:'POST',headers:{'X-Telegram-Bot-Api-Secret-Token':SECRET},body:JSON.stringify(update)});
+  const join={update_id:110,chat_join_request:{chat:{id:-1001001,type:'supergroup'},from:{id:101},user_chat_id:101,date:1792584000}};
+  await handleFetch(post(join),f.env);
+  const callback={update_id:111,callback_query:{id:'join-callback',from:{id:101},data:`pilot:join:${joinId}:6`,message:{date:1792584000,message_id:90,chat:{id:101,type:'private'},from:{id:900}}}};
+  await handleFetch(post(callback),f.env);assert.deepEqual(f.selectedGroups,['-1001001','-1001001']);
+  callback.callback_query.from.id=102;callback.callback_query.message.chat.id=102;callback.update_id++;
+  await handleFetch(post(callback),f.env);assert.equal(f.selectedGroups.at(-1),'102','an unrelated person cannot select the group through another member’s callback');
 });

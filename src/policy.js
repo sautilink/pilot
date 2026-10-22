@@ -29,39 +29,88 @@ const DOMAIN_LINK = /(?<![\p{L}\p{N}_@.-])(?:[\p{L}\p{N}](?:[\p{L}\p{N}-]{0,61}[
  * Match the actual destination, never a substring of its display label.
  * Bare domains use HTTPS; explicit HTTP and other protocols stay forbidden.
  */
-export function isAllowedUrl(value) {
-  if (typeof value !== "string") return false;
+function parseHttpsUrl(value) {
+  if (typeof value !== "string") return null;
   const raw = value.trim();
-  if (!raw || UNSAFE_URL_CHARACTERS.test(raw) || raw.startsWith("//")) return false;
+  if (!raw || raw.length > 4096 || UNSAFE_URL_CHARACTERS.test(raw) || raw.startsWith("//")) return null;
 
   const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
   const authority = candidate.match(/^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i)?.[1];
   // Empty credentials and percent-escaped hostnames are ambiguous spellings,
   // even where URL() would normalize them to a trusted destination.
-  if (!authority || /[@%]/.test(authority)) return false;
+  if (!authority || /[@%]|[^\x21-\x7e]/.test(authority)) return null;
 
   let url;
   try {
     url = new URL(candidate);
   } catch {
-    return false;
+    return null;
   }
   if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) {
-    return false;
+    return null;
   }
 
   const hostname = url.hostname.toLowerCase();
   if (hostname.length > 253 || !hostname.split(".").every((label) => DNS_LABEL.test(label))) {
-    return false;
+    return null;
   }
-  if (hostname === "sautilink.com" || hostname.endsWith(".sautilink.com")) return true;
-  if (hostname !== "t.me") return false;
+  const path = candidate.match(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*([^?#]*)/i)?.[1] || "/";
+  return { url, hostname, path, normalized: url.href };
+}
+
+function baseReason(parsed) {
+  const { hostname, path } = parsed;
+  if (hostname === "sautilink.com" || hostname.endsWith(".sautilink.com")) return 'base_domain';
+  if (hostname !== "t.me") return null;
 
   // Validate the original path as well as URL()'s interpretation. Dot segments
   // or encoded separators must not broaden an exact Telegram-channel rule.
-  const path = candidate.match(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*([^?#]*)/i)?.[1] || "/";
   const match = path.match(/^\/(?:s\/)?([a-z0-9_]+)(?:\/([0-9]+))?\/?$/i);
-  return Boolean(match && TELEGRAM_HANDLES.has(match[1].toLowerCase()));
+  return match && TELEGRAM_HANDLES.has(match[1].toLowerCase()) ? 'base_telegram' : null;
+}
+
+/** Normalize an additive group rule. "subdomains" includes the named host. */
+export function normalizeWhitelistRule(rule) {
+  if (!rule || !['url', 'domain', 'subdomains'].includes(rule.kind) || typeof rule.value !== 'string') {
+    throw new TypeError('Invalid whitelist rule');
+  }
+  const value = rule.value.trim();
+  const parsed = parseHttpsUrl(value);
+  if (!parsed || parsed.hostname.split('.').length < 2 || /^\d+(?:\.\d+)+$/.test(parsed.hostname) || parsed.hostname.split('.').some(label => label.startsWith('xn--'))) {
+    throw new TypeError('A valid ASCII HTTPS destination is required');
+  }
+  if (rule.kind !== 'url') {
+    if (parsed.path !== '/' || parsed.url.search || parsed.url.hash) throw new TypeError('Domain rules cannot contain a path or query');
+    return { kind: rule.kind, value: parsed.hostname };
+  }
+  // Do not accept an exact rule by silently rewriting dot segments or separators.
+  if (/(?:^|\/)(?:\.|%2e){1,2}(?:\/|$)|%2f|%5c/i.test(parsed.path)) throw new TypeError('Ambiguous URL path');
+  return { kind: 'url', value: parsed.normalized };
+}
+
+/** Explain only the supplied destination. No network requests or redirects. */
+export function explainUrl(value, rules = []) {
+  const parsed = parseHttpsUrl(value);
+  const result = { value, allowed: false, reason: 'invalid_url', normalized: parsed?.normalized || null, source: 'none', matchedRule: null };
+  if (!parsed) {
+    if (typeof value === 'string' && /^[a-z][a-z0-9+.-]*:\/\//i.test(value.trim()) && !/^https:\/\//i.test(value.trim())) result.reason = 'https_required';
+    return result;
+  }
+  const base = baseReason(parsed);
+  if (base) return { ...result, allowed: true, reason: base, source: 'base' };
+  for (const original of Array.isArray(rules) ? rules.slice(0, 100) : []) {
+    let rule;
+    try { rule = normalizeWhitelistRule(original); } catch { continue; }
+    const matches = rule.kind === 'domain' ? parsed.hostname === rule.value
+      : rule.kind === 'subdomains' ? (parsed.hostname === rule.value || parsed.hostname.endsWith(`.${rule.value}`))
+        : !/(?:^|\/)(?:\.|%2e){1,2}(?:\/|$)|%2f|%5c/i.test(parsed.path) && parsed.normalized === rule.value;
+    if (matches) return { ...result, allowed: true, reason: `group_${rule.kind}`, source: 'group', matchedRule: { ...rule, ...(typeof original.id === 'string' ? { id: original.id } : {}) } };
+  }
+  return { ...result, reason: 'not_allowed' };
+}
+
+export function isAllowedUrl(value, rules = []) {
+  return explainUrl(value, rules).allowed;
 }
 
 function stripSentencePunctuation(value) {
@@ -170,8 +219,8 @@ export function detectLinks(message) {
   return [...found];
 }
 
-export function analyzeMessage(message) {
-  const blockedLinks = detectLinks(message).filter((value) => !isAllowedUrl(value));
+export function analyzeMessage(message, rules = []) {
+  const blockedLinks = detectLinks(message).filter((value) => !isAllowedUrl(value, rules));
   const reasons = [];
   if (blockedLinks.length) reasons.push("link");
   if (message && typeof message === "object" && (

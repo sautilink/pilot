@@ -1,15 +1,16 @@
 import { escapeHtml } from './policy.js';
 import { renderBotPage } from './bot-ui.js';
+import { createFeatureCommands, FEATURE_COMMANDS, ADMIN_FEATURE_COMMANDS } from './feature-commands.js';
 
 const isAdmin = member => member?.status === 'creator' || member?.status === 'administrator';
 const validId = value => Number.isSafeInteger(Number(value)) && Number(value) !== 0;
 const userId = value => validId(value) && Number(value) > 0;
 const groupId = value => /^-[1-9]\d*$/.test(String(value)) && validId(value);
 const isGroup = chat => ['group', 'supergroup'].includes(chat?.type);
-const commandPattern = /^\/(start|help|pilot|about|howitworks|rules|connect|developer|admin|status|strikes|forgive|unban|pause|resume|testnotice|language)(?:@([A-Za-z0-9_]+))?(?:\s+([\s\S]*))?$/i;
+const commandPattern = /^\/(start|help|pilot|about|howitworks|rules|connect|developer|admin|status|strikes|forgive|unban|pause|resume|testnotice|language|dashboard|checklink|mystatus|appeal|history|appeals|settings|stats|alerts|report|whitelist)(?:@([A-Za-z0-9_]+))?(?:\s+([\s\S]*))?$/i;
 const pages = { start: 'home', pilot: 'home', help: 'help', about: 'about', howitworks: 'how', rules: 'rules', connect: 'connect', developer: 'developer', language: 'language' };
 const publicStartPages = new Set(['home', 'about', 'how', 'rules', 'connect', 'developer', 'help', 'language']);
-const callbackPages = new Set(['home', 'about', 'how', 'rules', 'connect', 'developer', 'help', 'admin', 'status', 'language']);
+const callbackPages = new Set(['home', 'about', 'how', 'rules', 'connect', 'developer', 'help', 'admin', 'status', 'language', ...FEATURE_COMMANDS]);
 
 const copy = {
   sw: {
@@ -22,7 +23,7 @@ const copy = {
     strikesUsage: 'Tumia <code>/strikes USER_ID</code> kwa ID ya mtumiaji katika group ulilochagua.',
     strikes: 'Mtumiaji <code>{user}</code>: makosa {strikes} kati ya 3 katika group hili.',
     group: 'Group lako',
-    readOnly: 'Tuma /{command} ndani ya group unalosimamia. Paneli hii ya faragha ni ya kukagua taarifa; majibu ya hatua za group yatakuja hapa.',
+    readOnly: 'Tuma /{command} ndani ya group unalosimamia. Amri hii hutekelezwa kwenye group lenyewe; majibu yake ya kina yatakuja hapa. Fungua /dashboard kwa mipangilio na ukaguzi wa matukio.',
     demo: '🧪 <b>TANGAZO LA MAJARIBIO — SautiLink Pilot</b>\n\nHuu ni mfano wa tangazo la usimamizi. Hakuna mtu aliyefungiwa, hakuna ujumbe uliofutwa, na hakuna kosa lililoongezwa.',
     demoSent: 'Tangazo la majaribio limetumwa kwenye group. Hakuna ban au kosa lililoongezwa.',
     demoFailed: 'Tangazo la majaribio halikutumwa. Kagua ruhusa za bot kutuma ujumbe kwenye group, kisha ujaribu tena.',
@@ -46,7 +47,7 @@ const copy = {
     strikesUsage: 'Use <code>/strikes USER_ID</code> for a member of the group you selected.',
     strikes: 'Member <code>{user}</code>: {strikes} of 3 strikes in this group.',
     group: 'Your group',
-    readOnly: 'Send /{command} inside the group you manage. This private panel is for checking information; detailed replies to group actions are delivered here.',
+    readOnly: 'Send /{command} inside the group you manage. This command runs in the group itself; detailed replies are delivered here. Open /dashboard for settings and case reviews.',
     demo: '🧪 <b>TEST ANNOUNCEMENT — SautiLink Pilot</b>\n\nThis is a sample moderation notice. Nobody was banned, no message was deleted, and no strike was added.',
     demoSent: 'The test announcement was sent to the group. No ban or strike was added.',
     demoFailed: 'The test announcement was not sent. Check the bot’s permission to send messages in the group, then try again.',
@@ -120,7 +121,7 @@ function noticeSummary(notice, language) {
   return summary + detail;
 }
 
-export function createBotExperience({ db, store, api, clock = () => Math.floor(Date.now() / 1000), me, say }) {
+export function createBotExperience({ db, store, api, clock = () => Math.floor(Date.now() / 1000), me, say, control, controlStore, dispatchControl, appUrl = 'https://pilot.sautilink.com/app' }) {
   const member = (chat, user) => api.call('getChatMember', { chat_id: Number(chat), user_id: Number(user) });
   const identity = me || (() => api.call('getMe'));
   const send = say || ((chat, text, extra = {}) => api.call('sendMessage', {
@@ -131,7 +132,8 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
   const userLanguage = from => store.getLanguage('user', from.id, /^en(?:-|$)/i.test(from.language_code || '') ? 'en' : 'sw');
   const groupLanguage = chat => store.getLanguage('group', chat, 'sw');
   const replyLanguage = message => !anonymous(message) && userId(message.from?.id) ? userLanguage(message.from) : groupLanguage(message.chat.id);
-  const context = (bot, from, language) => ({ username: bot.username, firstName: from?.first_name, language });
+  const context = (bot, from, language) => ({ username: bot.username, firstName: from?.first_name, language, appUrl });
+  const features = createFeatureCommands({ store, control, dispatchControl, appUrl });
   const link = (bot, chat) => {
     const name = /^[A-Za-z0-9_]{5,32}$/.test(bot.username || '') ? bot.username : 'sautilinkpilotbot';
     return `https://t.me/${name}?start=${chat == null ? 'home' : `manage_${chat}`}`;
@@ -144,6 +146,19 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     catch { return null; } // A failed acknowledgement must never replay an admin action.
   }
 
+  async function rememberAdmin(user, chat) {
+    if (!controlStore?.rememberAdmin || !userId(user)) return;
+    try { await controlStore.rememberAdmin(user, chat, clock()); } catch { /* Discovery must not block moderation. */ }
+  }
+
+  async function audit(message, updateId, action, targetId = null, details = {}) {
+    if (!controlStore?.audit || !Number.isSafeInteger(updateId)) return;
+    try {
+      await controlStore.audit({ id: `command:${updateId}:${action}`, chatId: message.chat.id,
+        actorId: anonymous(message) ? null : message.from.id, action, targetId, details, at: clock() });
+    } catch { /* A recorded command must not be replayed because logging failed. */ }
+  }
+
   async function pointer(message, bot, manage = false) {
     const language = await groupLanguage(message.chat.id);
     return quietSend(message.chat.id,
@@ -154,7 +169,11 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
   async function groupAuthorized(message) {
     if (anonymous(message)) return true;
     if (!userId(message.from?.id) || message.sender_chat || message.from?.is_bot) return false;
-    try { return isAdmin(await member(message.chat.id, message.from.id)); }
+    try {
+      const allowed = isAdmin(await member(message.chat.id, message.from.id));
+      if (allowed) await rememberAdmin(message.from.id, message.chat.id);
+      return allowed;
+    }
     catch { return false; }
   }
 
@@ -176,6 +195,7 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     // No title or stored group data is read before a fresh role check succeeds.
     try {
       const chat = await api.call('getChat', { chat_id: Number(target) });
+      if (isGroup(chat)) await rememberAdmin(user, target);
       return isGroup(chat) ? { chat } : { denied: true };
     } catch { return { unavailable: true }; }
   }
@@ -228,6 +248,22 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     let language = message.chat.type === 'private' && peer(message)
       ? await userLanguage(message.from) : await groupLanguage(message.chat.id);
 
+    const featureCommand = FEATURE_COMMANDS.has(command) ? command
+      : command === 'start' && ['dashboard', 'checklink', 'mystatus', 'appeal'].includes(argument) ? argument : null;
+    if (featureCommand) {
+      if (message.chat.type === 'private') {
+        if (peer(message)) await sendPage(message, await features.render({ command: featureCommand, argument: command === 'start' ? '' : argument, from: message.from, language, updateId }));
+      } else if (isGroup(message.chat)) {
+        if (ADMIN_FEATURE_COMMANDS.has(featureCommand)) {
+          if (await groupAuthorized(message)) {
+            if (!anonymous(message)) await store.setAdminContext(message.from.id, message.chat.id, clock());
+            await pointer(message, bot, true);
+          } else await quietSend(message.chat.id, textFor(language, 'denied'));
+        } else await pointer(message, bot);
+      }
+      return true;
+    }
+
     if (command === 'start' && argument?.startsWith('manage_') && message.chat.type === 'private') {
       if (!peer(message)) return true;
       const target = argument.slice('manage_'.length);
@@ -252,7 +288,13 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
         if (peer(message)) await sendPage(message, renderBotPage(page, context(bot, message.from, language)));
       } else if (isGroup(message.chat)) {
         if (command === 'rules') {
-          await quietSend(message.chat.id, renderBotPage('rules', context(bot, null, language)).text, {
+          let rules = renderBotPage('rules', context(bot, null, language)).text;
+          if (controlStore?.settings) {
+            const settings = await controlStore.settings(message.chat.id);
+            const extra = String(settings[`rules_${language}`] || '').slice(0, 600);
+            if (extra) rules += `\n\n<b>${language === 'en' ? 'Additional group rules' : 'Sheria za ziada za group'}</b>\n${escapeHtml(extra)}`;
+          }
+          await quietSend(message.chat.id, rules, {
             reply_markup: { inline_keyboard: [[{ text: textFor(language, 'privateHelp'), url: link(bot) }]] },
           });
         } else await pointer(message, bot);
@@ -293,6 +335,7 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
       } else {
         await store.setLanguage('group', chat, argument, clock());
         if (Number.isSafeInteger(updateId)) await store.done(updateId, clock());
+        await audit(message, updateId, 'language', null, { language: argument });
         await privateReply(message, bot, textFor(personalLanguage, 'groupLanguageSaved', { language: argument === 'en' ? 'English' : 'Kiswahili' }));
       }
       return true;
@@ -308,15 +351,19 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
       if (!Number.isSafeInteger(updateId)) return true;
       // Claim the demo before sending: retries must never produce another notice.
       await store.done(updateId, clock());
-      let outcome;
+      let outcome, deliveryStatus;
       try {
-        await send(chat, textFor(language, 'demo'));
+        const result = await send(chat, textFor(language, 'demo'));
+        if (!Number.isSafeInteger(result?.message_id)) throw new Error('Unconfirmed sample delivery');
+        deliveryStatus = 'sent';
         outcome = textFor(personalLanguage, 'demoSent');
       } catch (error) {
+        deliveryStatus = error?.ambiguous === false ? 'failed' : 'unknown';
         outcome = error?.ambiguous === false
           ? textFor(personalLanguage, 'demoFailed')
           : textFor(personalLanguage, 'demoUnknown');
       }
+      await audit(message, updateId, 'test_notice', null, { status: deliveryStatus });
       await privateReply(message, bot, outcome);
       return true;
     }
@@ -327,6 +374,7 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
         db.prepare('UPDATE groups SET enabled=?,activated_at=? WHERE chat_id=?').bind(command === 'resume' ? 1 : 0, clock(), String(chat)),
         db.prepare('INSERT OR IGNORE INTO processed_updates VALUES(?,?)').bind(updateId, clock()),
       ]);
+      await audit(message, updateId, command);
       await privateReply(message, bot, textFor(personalLanguage, command === 'resume' ? 'resumed' : 'paused'));
       return true;
     }
@@ -345,16 +393,22 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     if (command === 'unban') {
       // Claim before Telegram's non-idempotent mutation, even on a lost response.
       await store.done(updateId, clock());
-      try { await api.call('unbanChatMember', { chat_id: chat, user_id: Number(target), only_if_banned: true }); }
+      try {
+        const result = await api.call('unbanChatMember', { chat_id: chat, user_id: Number(target), only_if_banned: true });
+        if (result !== true) throw new Error('Unconfirmed unban');
+      }
       catch {
+        await audit(message, updateId, 'member_unban_unknown', target);
         await privateReply(message, bot, textFor(personalLanguage, 'unbanUnknown'));
         return true;
       }
       await store.override(chat, target, clock(), false);
+      await audit(message, updateId, 'member_unban', target);
       await privateReply(message, bot, textFor(personalLanguage, 'unbanned'));
       return true;
     }
     await store.override(chat, target, clock(), true, updateId);
+    await audit(message, updateId, 'strikes_reset', target);
     await privateReply(message, bot, textFor(personalLanguage, 'forgiven'));
     return true;
   }
@@ -380,6 +434,8 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
       language = match[2];
       await store.setLanguage('user', query.from.id, language, clock());
       view = renderBotPage('language', context(bot, query.from, language));
+    } else if (FEATURE_COMMANDS.has(match[1])) {
+      view = await features.render({ command: match[1], from: query.from, language, updateId });
     } else if (match[1] === 'admin' || match[1] === 'status') {
       const choice = await selected(query.from.id, bot, query.from, language);
       view = choice.page || await adminPage(match[1], bot, query.from, choice.chat, language);

@@ -2,6 +2,10 @@ import { applySchema, createStore } from './store.js';
 import { createTelegram, secureEqual, webhookSecret } from './telegram.js';
 import { renderHome, renderSetup, renderPrivacy } from './pages.js';
 import { isExpectedBot, syncExperience } from './experience-sync.js';
+import {renderDashboard} from './dashboard.js';
+import {handleDashboardApi} from './dashboard-api.js';
+import {createGuardrailStore} from './guardrail-store.js';
+import {operationalHealth} from './monitoring.js';
 
 const SECURITY_HEADERS={
   'X-Content-Type-Options':'nosniff',
@@ -15,6 +19,12 @@ function response(body,status=200,type='application/json; charset=utf-8') {
   return new Response(type.startsWith('application/json') ? JSON.stringify(body) : body,{status,headers:{...SECURITY_HEADERS,'Content-Type':type}});
 }
 const html=body=>response(body,200,'text/html; charset=utf-8');
+const appHtml=body=>{
+  const headers={...SECURITY_HEADERS,'Content-Type':'text/html; charset=utf-8'};
+  delete headers['X-Frame-Options'];
+  headers['Content-Security-Policy']="default-src 'self'; script-src 'self' 'unsafe-inline' https://telegram.org; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://sautilink.com; connect-src 'self'; frame-ancestors https://web.telegram.org https://*.telegram.org; base-uri 'none'; form-action 'self'";
+  return new Response(body,{headers});
+};
 const error=(message,status)=>response({ok:false,message},status);
 const validToken=value=>/^\d+:[A-Za-z0-9_-]{20,}$/.test(value || '');
 const SETUP_MESSAGES={
@@ -72,7 +82,7 @@ async function setup(request,env,lang='sw') {
     const state=await publicState(env);
     const webhook=await api.call('getWebhookInfo');
     return response({ok:true,...state,database:'connected',webhook_url:webhook.url,
-      status:{pending_updates:webhook.pending_update_count,last_error:webhook.last_error_message || null,allowed_updates:webhook.allowed_updates || []}});
+      status:{pending_updates:webhook.pending_update_count,last_error:webhook.last_error_message || null,allowed_updates:webhook.allowed_updates || []},operations:state.ready ? await operationalHealth(env.DB) : null});
   }
   const identity=await api.call('getMe');
   if(!isExpectedBot(identity,env.BOT_USERNAME || 'sautilinkpilotbot')) {
@@ -98,6 +108,8 @@ export async function handleFetch(request,env,ctx) {
     lang=url.searchParams.get('lang')==='en' ? 'en' : 'sw';
     if(request.method==='GET' && path==='/') return html(renderHome({...await publicState(env),lang}));
     if(request.method==='GET' && path==='/privacy') return html(renderPrivacy(lang));
+    if(request.method==='GET' && path==='/app') return appHtml(renderDashboard({lang}));
+    if(path==='/api/pilot') return await handleDashboardApi(request,env);
     if(request.method==='GET' && path==='/setup') return html(renderSetup(lang));
     if(request.method==='GET' && path==='/health') {
       const {ready}=await publicState(env); return response({ok:ready,service:'SautiLink Pilot'},ready ? 200 : 503);
@@ -113,11 +125,18 @@ export async function handleFetch(request,env,ctx) {
     let update; try { update=JSON.parse(body); } catch { return error('JSON si sahihi.',400); }
     if(!Number.isSafeInteger(update?.update_id)) return error('Update si sahihi.',400);
     if(!(await publicState(env)).ready) return error('Kamilisha setup kwanza.',503);
-    const event=update.message || update.edited_message || update.my_chat_member || update.chat_member;
+    const event=update.message || update.edited_message || update.my_chat_member || update.chat_member || update.chat_join_request;
     const callback=update.callback_query;
     const accessibleCallbackChat=callback?.message?.date!==0 && Number.isSafeInteger(callback?.message?.chat?.id);
     const callbackChat=accessibleCallbackChat ? callback.message.chat.id : callback?.from?.id;
-    const chatId=callback ? callbackChat : event?.chat?.id;
+    let chatId=callback ? callbackChat : event?.chat?.id;
+    const joinCallback=/^pilot:join:([a-f0-9]{24}):\d{1,3}$/.exec(String(callback?.data || ''));
+    if(joinCallback && Number.isSafeInteger(callback?.from?.id)) {
+      const guards=createGuardrailStore(env.DB);
+      await guards.ensure();
+      const join=await guards.first('SELECT chat_id,user_id FROM pilot_join_requests WHERE id=?',joinCallback[1]);
+      if(join && join.user_id===String(callback.from.id)) chatId=Number(join.chat_id);
+    }
     if(!Number.isSafeInteger(chatId) || chatId===0 || (callback && !accessibleCallbackChat && chatId<0)) return response({ok:true});
     // Upgrade metadata only on authenticated, valid updates for an already-ready
     // installation. Public GETs and failed authentication cannot mutate Telegram.

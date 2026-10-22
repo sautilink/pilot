@@ -64,7 +64,7 @@ test('sync registers bilingual profile metadata and correctly scoped menus witho
     assert.ok(description.length > 0 && description.length <= 512);
     assert.ok(short.length > 0 && short.length <= 120);
     if (language === 'en') assert.match(description, /helps moderate Telegram groups/);
-    else assert.match(description, /inasaidia kusimamia Telegram groups/);
+    else assert.match(description, /husaidia kusimamia Telegram groups/);
   }
   assert.ok(f.calls.every(call => ['getMe', 'setWebhook', 'setMyCommands', 'setMyDescription', 'setMyShortDescription'].includes(call.method)));
   assert.equal(await f.store.setting('experience_version'), EXPERIENCE_VERSION);

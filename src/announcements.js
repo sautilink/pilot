@@ -1,4 +1,5 @@
 import { escapeHtml } from './policy.js';
+import { fillTemplate } from './templates.js';
 
 function displayName(message,language) {
   return [message.from?.first_name,message.from?.last_name].filter(Boolean).join(' ') || message.sender_chat?.title || (language==='en' ? 'Member' : 'Mtumiaji');
@@ -11,7 +12,7 @@ function expiry(until,language) {
   }).format(new Date(until*1000)) + ' EAT';
 }
 
-export function formatAnnouncement(row,message,success=true,language='sw') {
+export function formatAnnouncement(row,message,success=true,language='sw',settings={}) {
   const en=language==='en';
   const name=displayName(message,language);
   const reasons=JSON.parse(row.reasons).map(reason=>reason==='forward' ? (en ? 'Forwarded messages are not allowed.' : 'Ujumbe wa forward hauruhusiwi.') : (en ? 'The posted link is not allowed.' : 'Link iliyotumwa hairuhusiwi.'));
@@ -22,12 +23,25 @@ export function formatAnnouncement(row,message,success=true,language='sw') {
   const body=success
     ? [name,identity,'',`${labels.reason}: ${reasons.join(' ')}`,`${labels.penalty}: ${duration}`,`${labels.strike}: ${row.strike} / 3`,`${labels.ends}: ${expiry(row.until_date,language)}`,'',labels.removed,row.until_date ? labels.expires : labels.permanent]
     : [name,identity,'',`${labels.reason}: ${reasons.join(' ')}`,'',labels.review];
-  const plain=[title,'',...body,'',labels.tag].join('\n');
+  let plain=[title,'',...body,'',labels.tag].join('\n');
   // A banned user is no longer a member. Names must not depend on tg:// mentions.
-  const rich=[`<b>${title}</b>`,'',`<b>${escapeHtml(name)}</b>`,row.user_id ? `<code>${escapeHtml(identity)}</code>` : escapeHtml(identity),'',
+  let rich=[`<b>${title}</b>`,'',`<b>${escapeHtml(name)}</b>`,row.user_id ? `<code>${escapeHtml(identity)}</code>` : escapeHtml(identity),'',
     `<b>${labels.reason}</b>\n${reasons.map(reason=>`• ${escapeHtml(reason)}`).join('\n')}`,
     ...(success ? ['',`⏳ <b>${labels.penalty}:</b> ${duration}`,`📍 <b>${labels.strike}:</b> ${row.strike} / 3`,`🗓 <b>${labels.ends}:</b> ${escapeHtml(expiry(row.until_date,language))}`,'',`🗑 ${labels.removed}`,row.until_date ? labels.expires : labels.permanent] : ['',labels.review]),
     '',`<i>${labels.tag}</i>`].join('\n');
+  if(success && settings.notice_template==='compact') {
+    plain=[title,name,identity,`${labels.reason}: ${reasons.join(' ')}`,`${labels.penalty}: ${duration} · ${labels.strike}: ${row.strike}/3`,`${labels.ends}: ${expiry(row.until_date,language)}`,labels.removed].join('\n');
+    rich=escapeHtml(plain);
+  } else if(success && settings.notice_template==='formal') {
+    const heading=en?'Moderation notice':'Taarifa ya usimamizi';
+    plain=[`SautiLink Pilot · ${heading}`,'',name,identity,`${labels.reason}: ${reasons.join(' ')}`,`${labels.penalty}: ${duration}`,`${labels.strike}: ${row.strike} / 3`,`${labels.ends}: ${expiry(row.until_date,language)}`,'',labels.removed,row.until_date?labels.expires:labels.permanent].join('\n');
+    rich=escapeHtml(plain);
+  }
+  const extra=settings[`notice_${en?'en':'sw'}`];
+  if(extra) {
+    const custom=fillTemplate(extra,{user:name,reason:reasons.join(' '),duration:success?duration:(en?'Review pending':'Ukaguzi unasubiri'),group:message.chat?.title || 'Group'},800);
+    plain+=`\n\n${custom}`;rich+=`\n\n${escapeHtml(custom)}`;
+  }
   return {rich,plain};
 }
 
@@ -40,7 +54,7 @@ export function noticeErrorKind(error) {
   return 'telegram_rejected';
 }
 
-export function createAnnouncer({store,api,clock}) {
+export function createAnnouncer({store,api,clock,controlStore}) {
   async function notify(row,message,success=true) {
     const record=await store.noticeRecord(row.id,clock());
     if(!record || ['sent','unknown','failed','cancelled'].includes(record.status)) return false;
@@ -51,7 +65,8 @@ export function createAnnouncer({store,api,clock}) {
     }
     if(record.retry_at>clock()) return true;
     const language=await store.getLanguage('group',message.chat.id);
-    const {rich,plain}=formatAnnouncement(row,message,success,language);
+    const settings=controlStore ? await controlStore.settings(message.chat.id) : {};
+    const {rich,plain}=formatAnnouncement(row,message,success,language,settings);
     let usePlain=false;
     let thread=message.is_topic_message && Number.isSafeInteger(message.message_thread_id) ? message.message_thread_id : null;
     for(let attempt=0;attempt<3;attempt++) {

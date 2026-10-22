@@ -5,7 +5,7 @@ import {
   getBotDescription, getBotShortDescription,
 } from './bot-ui.js';
 
-export const ALLOWED_UPDATES = ['message', 'edited_message', 'my_chat_member', 'chat_member', 'callback_query'];
+export const ALLOWED_UPDATES = ['message', 'edited_message', 'my_chat_member', 'chat_member', 'callback_query', 'chat_join_request'];
 const LEASE_SECONDS = 300;
 const RETRY_SECONDS = 60;
 const LEASE_KEY = 'experience_sync_lease_until';

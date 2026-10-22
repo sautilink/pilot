@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { analyzeMessage, banDuration, detectLinks, escapeHtml, isAllowedUrl } from "../src/policy.js";
+import { analyzeMessage, banDuration, detectLinks, escapeHtml, isAllowedUrl, normalizeWhitelistRule, explainUrl } from "../src/policy.js";
 
 test("whitelist accepts HTTPS SautiLink hosts and normal paths", () => {
   for (const url of [
@@ -166,4 +166,40 @@ test("HTML escaping prevents sender names from injecting bot announcement markup
   assert.equal(escapeHtml('<a href="evil">A & B\'s</a>'), "&lt;a href=&quot;evil&quot;&gt;A &amp; B&#39;s&lt;/a&gt;");
   assert.equal(escapeHtml(null), "");
   assert.equal(escapeHtml("Juma 😀"), "Juma 😀");
+});
+
+test('additive domain and subdomain rules match hostname boundaries and preserve the base whitelist', () => {
+  const rules = [{ id: 'exact', kind: 'domain', value: 'HTTPS://Example.COM:443/' }, { id: 'tree', kind: 'subdomains', value: 'school.test' }];
+  assert.deepEqual(normalizeWhitelistRule(rules[0]), { kind: 'domain', value: 'example.com' });
+  for (const value of ['https://example.com/path', 'https://school.test', 'https://a.school.test', 'https://a.b.school.test', 'https://sautilink.com', 'https://t.me/sautilink']) assert.equal(isAllowedUrl(value, rules), true, value);
+  for (const value of ['https://www.example.com', 'https://example.com.evil.test', 'https://evil-school.test', 'https://school.test.evil.test', 'http://example.com', 'https://example.com:444', 'https://evil.test@example.com']) assert.equal(isAllowedUrl(value, rules), false, value);
+  assert.equal(isAllowedUrl('https://example.com'), false, 'group rules do not leak into global policy');
+});
+
+test('exact URL rules preserve path, query and fragment specificity', () => {
+  const rule = normalizeWhitelistRule({ kind: 'url', value: 'https://EXAMPLE.com:443/guide?version=1#part' });
+  assert.deepEqual(rule, { kind: 'url', value: 'https://example.com/guide?version=1#part' });
+  assert.equal(isAllowedUrl('example.com/guide?version=1#part', [rule]), true);
+  for (const value of ['https://example.com/guide', 'https://example.com/guide?version=2#part', 'https://example.com/guide?version=1#other', 'https://example.com/guide/extra?version=1#part', 'https://example.com/other/../guide?version=1#part', 'https://example.com/%2e/guide?version=1#part']) assert.equal(isAllowedUrl(value, [rule]), false, value);
+});
+
+test('custom whitelist rejects ambiguous hosts, Unicode lookalikes and malformed rule shapes', () => {
+  for (const value of ['http://example.com', 'https://user@example.com', 'https://%65xample.com', 'https://ｅxample.com', 'https://exаmple.com', 'https://xn--exmple-4nf.com', 'https://example.com.', 'https://example.com:444', 'https://192.168.1.1', 'localhost', 'https://a..example.com', '*.example.com', '//example.com']) assert.throws(() => normalizeWhitelistRule({ kind: 'domain', value }), TypeError, value);
+  for (const value of ['https://example.com/path', 'https://example.com?x=1', 'https://example.com#x']) assert.throws(() => normalizeWhitelistRule({ kind: 'domain', value }), TypeError);
+  for (const value of ['https://example.com/a/../b', 'https://example.com/%2e%2e/b', 'https://example.com/a%2fb']) assert.throws(() => normalizeWhitelistRule({ kind: 'url', value }), TypeError);
+  for (const rule of [null, {}, { kind: 'regex', value: '.*' }, { kind: 'domain', value: 123 }]) assert.throws(() => normalizeWhitelistRule(rule), TypeError);
+  assert.equal(isAllowedUrl('https://ｓａｕｔｉｌｉｎｋ.com'), false);
+});
+
+test('checker explains base and group matches without overriding forwarding policy', () => {
+  const rules = [{ id: 'group-rule', kind: 'domain', value: 'example.com' }];
+  assert.equal(explainUrl('https://sautilink.com', rules).source, 'base');
+  const group = explainUrl('https://example.com/path', rules);
+  assert.equal(group.allowed, true);
+  assert.equal(group.reason, 'group_domain');
+  assert.equal(group.matchedRule.id, 'group-rule');
+  assert.equal(explainUrl('http://example.com', rules).reason, 'https_required');
+  assert.equal(explainUrl('https://other.test', rules).reason, 'not_allowed');
+  assert.deepEqual(analyzeMessage({ text: 'https://example.com', forward_origin: { type: 'hidden_user' } }, rules), { reasons: ['forward'], blockedLinks: [] });
+  assert.equal(isAllowedUrl('https://other.test', [null, { kind: 'domain', value: 'other.test@evil.test' }]), false);
 });
