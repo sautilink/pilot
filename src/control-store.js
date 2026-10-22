@@ -1,5 +1,6 @@
 import { normalizeCommandExceptions } from './command-spam.js';
 import { ensureSchemaFamily } from './schema-ready.js';
+import { createToolsStore } from './tools-store.js';
 
 export const CONTROL_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS pilot_group_settings (
@@ -88,9 +89,10 @@ export function createControlStore(db) {
       catch { settings.command_spam_allowlist = CONTROL_DEFAULTS.command_spam_allowlist; }
       return settings;
     },
-    async rules(chat) {
+    async rules(chat, now = Math.floor(Date.now()/1000)) {
       await ensure();
-      return all('SELECT id,kind,value FROM pilot_whitelist_rules WHERE chat_id=? ORDER BY created_at,id LIMIT 100', String(chat));
+      await createToolsStore(db).ensure();
+      return all("SELECT id,kind,value,0 AS expires_at FROM pilot_whitelist_rules WHERE chat_id=? UNION ALL SELECT id,'url' AS kind,url AS value,expires_at FROM pilot_temporary_links WHERE chat_id=? AND expires_at>? ORDER BY id LIMIT 150", String(chat), String(chat), now);
     },
     async rememberAdmin(user, chat, now) {
       await ensure();

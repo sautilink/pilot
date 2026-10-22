@@ -1,12 +1,18 @@
 import { escapeHtml } from './policy.js';
 
-export const EXPERIENCE_VERSION = '2026-10-22.3';
+export const EXPERIENCE_VERSION = '2026-10-22.4';
 export const BOT_DESCRIPTION = 'SautiLink Pilot husaidia kusimamia Telegram groups kwa sheria wazi, moderation ya links na forwards, na matangazo yenye sababu. Kagua link, ona matukio yako au tuma rufaa. Admin ana paneli ya faragha ya historia, mipangilio, takwimu na zana za ziada. Chagua Kiswahili au English uanze.';
 export const BOT_SHORT_DESCRIPTION = 'Msaidizi wa group: moderation, kikagua link, rufaa na paneli ya admin. Kiswahili / English.';
 
 export const PUBLIC_COMMANDS = [
   { command: 'start', description: 'Fungua menyu ya SautiLink Pilot' },
   { command: 'dashboard', description: 'Fungua paneli ya Pilot' },
+  { command: 'tools', description: 'Zana za jumuiya, ratiba na mipango' },
+  { command: 'flag', description: 'Ripoti ujumbe kwa reply ndani ya group' },
+  { command: 'ask', description: 'Tafuta jibu lililoidhinishwa na admins' },
+  { command: 'events', description: 'Ona events za group na ujisajili' },
+  { command: 'changelog', description: 'Vipengele vipya na mipango ya Pilot' },
+  { command: 'feedback', description: 'Tuma wazo au ripoti tatizo' },
   { command: 'checklink', description: 'Kagua kama link inaruhusiwa' },
   { command: 'mystatus', description: 'Ona matukio yako na hali ya rufaa' },
   { command: 'appeal', description: 'Omba admin apitie tukio lako' },
@@ -23,6 +29,11 @@ export const PUBLIC_COMMANDS = [
 export const GROUP_COMMANDS = [
   { command: 'rules', description: 'Soma sheria za group' },
   { command: 'help', description: 'Pata msaada kwenye mazungumzo ya faragha' },
+  { command: 'flag', description: 'Reply kuripoti ujumbe kwa admins', is_ephemeral: true },
+  { command: 'ask', description: 'Tafuta kwenye majibu ya group', is_ephemeral: true },
+  { command: 'events', description: 'Events za group na RSVP', is_ephemeral: true },
+  { command: 'tools', description: 'Fungua zana za jumuiya', is_ephemeral: true },
+  { command: 'checklink', description: 'Kagua link faraghani kabla ya kuituma', is_ephemeral: true },
 ];
 
 // Register only with Telegram's administrator command scope.
@@ -30,15 +41,15 @@ export const ADMIN_COMMANDS = [
   ...GROUP_COMMANDS,
   { command: 'admin', description: 'Fungua paneli ya faragha ya admin' },
   { command: 'dashboard', description: 'Fungua paneli ya usimamizi faraghani' },
-  { command: 'history', description: 'Ona matukio ya group faraghani' },
-  { command: 'appeals', description: 'Kagua rufaa za wanachama faraghani' },
-  { command: 'settings', description: 'Mipangilio ya group faraghani' },
-  { command: 'stats', description: 'Takwimu za group faraghani' },
-  { command: 'whitelist', description: 'Kagua links za ziada zinazoruhusiwa' },
+  { command: 'history', description: 'Ona matukio ya group faraghani', is_ephemeral: true },
+  { command: 'appeals', description: 'Kagua rufaa za wanachama faraghani', is_ephemeral: true },
+  { command: 'settings', description: 'Mipangilio ya group faraghani', is_ephemeral: true },
+  { command: 'stats', description: 'Takwimu za group faraghani', is_ephemeral: true },
+  { command: 'whitelist', description: 'Kagua links za ziada zinazoruhusiwa', is_ephemeral: true },
   { command: 'alerts', description: 'Chagua taarifa zako za matatizo' },
   { command: 'report', description: 'Chagua ripoti yako ya siku au wiki' },
   { command: 'language', description: 'Badili lugha ya group' },
-  { command: 'status', description: 'Pokea hali ya group kwenye mazungumzo ya faragha' },
+  { command: 'status', description: 'Pokea hali ya group kwenye mazungumzo ya faragha', is_ephemeral: true },
   { command: 'strikes', description: 'Kagua makosa ya mtumiaji kwenye group hili' },
   { command: 'forgive', description: 'Safisha historia ya makosa ya mtumiaji' },
   { command: 'unban', description: 'Ondoa ban bila kufuta historia ya makosa' },
@@ -123,6 +134,8 @@ export function renderBotPage(page, context = {}) {
   if (page === 'home' || page === 'help') rows.splice(1, 0, [button('🔎 Kagua link', 'checklink'), button('📂 Matukio yangu', 'mystatus')]);
   if (page === 'admin' && context.groupId) rows.splice(1, 0, [button('📋 Historia', 'history'), button('📝 Rufaa', 'appeals')], [button('⚙ Mipangilio', 'settings'), button('▥ Takwimu', 'stats')]);
   if (page === 'home' && context.isOwner === true) rows.push([button('📣 Updates za Pilot', 'bc:panel')]);
+  if (['home','admin','help'].includes(page)) rows.push([{text:'✦ Zana za jumuiya',web_app:{url:`https://pilot.sautilink.com/tools?lang=sw${context.groupId?`&chat=${context.groupId}`:''}`}}]);
+  if (page==='developer') rows.splice(0,0,[{text:'⌘ Integrations na API',url:'https://pilot.sautilink.com/developers?lang=sw'}]);
   if (page !== 'language') rows.push([button('🌐 Lugha / Language', 'language')]);
   return { text, reply_markup: { inline_keyboard: rows } };
 }
@@ -132,6 +145,12 @@ export function getPublicCommands(language = 'sw') {
   return [
     { command: 'start', description: 'Open the SautiLink Pilot menu' },
     { command: 'dashboard', description: 'Open your Pilot panel' },
+    { command: 'tools', description: 'Community tools, schedules and planning' },
+    { command: 'flag', description: 'Report a message by replying in your group' },
+    { command: 'ask', description: 'Search answers approved by group admins' },
+    { command: 'events', description: 'View group events and RSVP' },
+    { command: 'changelog', description: 'Pilot updates and roadmap' },
+    { command: 'feedback', description: 'Share an idea or report a problem' },
     { command: 'checklink', description: 'Check whether a link is allowed' },
     { command: 'mystatus', description: 'View your cases and appeal status' },
     { command: 'appeal', description: 'Request an admin review of your case' },
@@ -151,6 +170,11 @@ export function getGroupCommands(language = 'sw') {
   return [
     { command: 'rules', description: 'Read the group rules' },
     { command: 'help', description: 'Get help in a private chat' },
+    { command: 'flag', description: 'Reply to report a message to admins', is_ephemeral: true },
+    { command: 'ask', description: 'Search your group’s approved answers', is_ephemeral: true },
+    { command: 'events', description: 'View group events and RSVP', is_ephemeral: true },
+    { command: 'tools', description: 'Open Community tools', is_ephemeral: true },
+    { command: 'checklink', description: 'Check a link privately before posting', is_ephemeral: true },
   ];
 }
 
@@ -160,15 +184,15 @@ export function getAdminCommands(language = 'sw') {
     ...getGroupCommands('en'),
     { command: 'admin', description: 'Open your private admin panel' },
     { command: 'dashboard', description: 'Open your moderation panel privately' },
-    { command: 'history', description: 'View group incidents privately' },
-    { command: 'appeals', description: 'Review member appeals privately' },
-    { command: 'settings', description: 'View group settings privately' },
-    { command: 'stats', description: 'View group statistics privately' },
-    { command: 'whitelist', description: 'Review additional allowed links' },
+    { command: 'history', description: 'View group incidents privately', is_ephemeral: true },
+    { command: 'appeals', description: 'Review member appeals privately', is_ephemeral: true },
+    { command: 'settings', description: 'View group settings privately', is_ephemeral: true },
+    { command: 'stats', description: 'View group statistics privately', is_ephemeral: true },
+    { command: 'whitelist', description: 'Review additional allowed links', is_ephemeral: true },
     { command: 'alerts', description: 'Choose your problem alerts' },
     { command: 'report', description: 'Choose your daily or weekly report' },
     { command: 'language', description: 'Change the group language' },
-    { command: 'status', description: 'Receive group status privately' },
+    { command: 'status', description: 'Receive group status privately', is_ephemeral: true },
     { command: 'strikes', description: 'Check a member’s strikes in this group' },
     { command: 'forgive', description: 'Clear a member’s strike history' },
     { command: 'unban', description: 'Remove a ban and keep strike history' },
@@ -246,6 +270,8 @@ function renderEnglishPage(page, context) {
   if (page === 'home' || page === 'help') rows.splice(1, 0, [button('🔎 Check a link', 'checklink'), button('📂 My cases', 'mystatus')]);
   if (page === 'admin' && context.groupId) rows.splice(1, 0, [button('📋 History', 'history'), button('📝 Appeals', 'appeals')], [button('⚙ Settings', 'settings'), button('▥ Statistics', 'stats')]);
   if (page === 'home' && context.isOwner === true) rows.push([button('📣 Pilot updates', 'bc:panel')]);
+  if (['home','admin','help'].includes(page)) rows.push([{text:'✦ Community tools',web_app:{url:`https://pilot.sautilink.com/tools?lang=en${context.groupId?`&chat=${context.groupId}`:''}`}}]);
+  if (page==='developer') rows.splice(0,0,[{text:'⌘ Integrations and API',url:'https://pilot.sautilink.com/developers'}]);
   if (page !== 'language') rows.push([button('🌐 Language / Lugha', 'language')]);
   return { text, reply_markup: { inline_keyboard: rows } };
 }

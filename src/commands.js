@@ -2,6 +2,7 @@ import { escapeHtml } from './policy.js';
 import { renderBotPage } from './bot-ui.js';
 import { createFeatureCommands, FEATURE_COMMANDS, ADMIN_FEATURE_COMMANDS } from './feature-commands.js';
 import { createBroadcastCommands } from './broadcast-commands.js';
+import { sendPrivateReply } from './private-replies.js';
 
 const isAdmin = member => member?.status === 'creator' || member?.status === 'administrator';
 const validId = value => Number.isSafeInteger(Number(value)) && Number(value) !== 0;
@@ -169,6 +170,9 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
 
   async function pointer(message, bot, manage = false) {
     const language = await groupLanguage(message.chat.id);
+    if(Number.isSafeInteger(message.ephemeral_message_id)&&!message.sender_chat&&userId(message.from?.id)) {
+      return sendPrivateReply({api,message,text:textFor(language,manage?'panelPointer':'publicPointer'),extra:{reply_markup:manage?panelMarkup(bot,message.chat.id,language):{inline_keyboard:[[{text:textFor(language,'openPilot'),url:link(bot)}]]}},clock});
+    }
     return quietSend(message.chat.id,
       textFor(language, manage ? 'panelPointer' : 'publicPointer'),
       { reply_markup: manage ? panelMarkup(bot, message.chat.id, language) : { inline_keyboard: [[{ text: textFor(language, 'openPilot'), url: link(bot) }]] } });
@@ -189,7 +193,8 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     if (message.chat.type === 'private') return quietSend(message.chat.id, text, extra);
     // sender_chat's compatibility user is never a private recipient.
     if (anonymous(message) || message.sender_chat || !userId(message.from?.id)) return pointer(message, bot, true);
-    const delivered = await quietSend(message.from.id, text, extra);
+    const delivered = Number.isSafeInteger(message.ephemeral_message_id)
+      ? await sendPrivateReply({api,message,text,extra,clock}) : await quietSend(message.from.id,text,extra);
     if (!delivered) await pointer(message, bot, true);
     return delivered;
   }
@@ -272,8 +277,14 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
         if (ADMIN_FEATURE_COMMANDS.has(featureCommand)) {
           if (await groupAuthorized(message)) {
             if (!anonymous(message)) await store.setAdminContext(message.from.id, message.chat.id, clock());
-            await pointer(message, bot, true);
+            if(!anonymous(message)&&Number.isSafeInteger(message.ephemeral_message_id)) {
+              const view=await features.render({command:featureCommand,argument:argument||'',from:message.from,language,updateId,groupId:message.chat.id});
+              await privateReply(message,bot,view.text,{reply_markup:view.reply_markup});
+            } else await pointer(message, bot, true);
           } else await quietSend(message.chat.id, textFor(language, 'denied'));
+        } else if(!message.sender_chat&&userId(message.from?.id)&&Number.isSafeInteger(message.ephemeral_message_id)) {
+          const view=await features.render({command:featureCommand,argument:argument||'',from:message.from,language,updateId,groupId:message.chat.id});
+          await privateReply(message,bot,view.text,{reply_markup:view.reply_markup});
         } else await pointer(message, bot);
       }
       return true;

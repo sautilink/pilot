@@ -38,10 +38,10 @@ test('canonical URLs strip display and launch parameters and reject nonpublic ro
   assert.equal(canonicalUrl('/?lang=en&theme=dark&utm_source=test#jaribu'), `${SEO_ORIGIN}/`);
   assert.equal(canonicalUrl('/privacy?theme=dark&tgWebAppData=private-launch#private', 'sw'), `${SEO_ORIGIN}/privacy?lang=sw`);
   assert.equal(canonicalUrl('/', 'unknown'), `${SEO_ORIGIN}/`);
-  for (const path of ['/app', '/setup', '/api/me', '/privacy/', 'https://example.com/', '//example.com/privacy']) {
+  for (const path of ['/app', '/tools', '/setup', '/community/private', '/api/me', '/privacy/', 'https://example.com/', '//example.com/privacy']) {
     assert.throws(() => canonicalUrl(path), /public Pilot page/);
   }
-  assert.deepEqual(PUBLIC_SEO_PAGES, ['/', '/privacy']);
+  assert.deepEqual(PUBLIC_SEO_PAGES, ['/', '/privacy', '/updates', '/roadmap', '/developers']);
 });
 
 test('social metadata describes the exact language page with a real summary image', () => {

@@ -2,6 +2,7 @@ import {createStore} from './store.js';
 import {createControlStore} from './control-store.js';
 import {createGuardrailStore} from './guardrail-store.js';
 import {escapeHtml} from './policy.js';
+import {createToolsStore} from './tools-store.js';
 
 const admin=value=>['creator','administrator'].includes(value?.status);
 const LABELS={
@@ -23,7 +24,7 @@ export async function operationalHealth(db,now=Math.floor(Date.now()/1000)) {
  */
 export async function runMonitoring({db,api,clock=()=>Math.floor(Date.now()/1000),limit=12}) {
   const store=createStore(db),control=createControlStore(db),guards=createGuardrailStore(db),now=clock();
-  await Promise.all([store.ensureExtras(),control.ensure(),guards.ensure()]);
+  await Promise.all([store.ensureExtras(),control.ensure(),guards.ensure(),createToolsStore(db).ensure()]);
   if(await store.setting('ready')!=='1') return {status:'not_ready'};
   const lease=now+540;
   const claim=await store.run('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE CAST(settings.value AS INTEGER)<=?','monitoring_lease',String(lease),now);
@@ -62,6 +63,8 @@ export async function runMonitoring({db,api,clock=()=>Math.floor(Date.now()/1000
           await guards.health(chat,'notice_delivery',Boolean(delivery && (['failed','unknown'].includes(delivery.status) || ['sending','pending'].includes(delivery.status) && delivery.updated_at<now-600)),now);
           const review=await guards.first("SELECT id FROM incidents WHERE chat_id=? AND status IN ('uncertain','failed','review','channel_review') AND created_at>? LIMIT 1",chat,now-86400);
           await guards.health(chat,'moderation_review',Boolean(review),now);
+          const raid=await guards.first('SELECT a.id FROM pilot_raid_alerts a JOIN pilot_raid_settings s ON s.chat_id=a.chat_id WHERE a.chat_id=? AND s.enabled=1 AND a.created_at>? LIMIT 1',chat,now-600);
+          await guards.health(chat,'raid_activity',Boolean(raid),now);
           group={title:info.title || 'Group',state};groupCache.set(chat,group);
         } catch {continue;}
       }

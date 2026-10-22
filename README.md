@@ -435,6 +435,93 @@ Daily cleanup applies these rules. Control-history deletion uses bounded batches
 
 Cleanup does not remove messages already sent to Telegram. Telegram messages, platform request logs, and backups are subject to the relevant platform and operator settings.
 
+## Community tools release — 22 October 2026
+
+Open **`/tools` in the bot**, or choose **Community tools** from `/start` or the moderation panel. The new workspace is at `/tools`; the existing moderation workspace remains at `/app`. Both use signed Telegram Mini App identity, English and Kiswahili, shared animated icons, and the same theme controls. A normal browser visitor sees a public welcome, never a private group workspace. New optional group features start inactive until a current admin configures them.
+
+### Commands and access
+
+| Command | Purpose |
+| --- | --- |
+| `/tools` | Open Community tools; group admins can select a managed group |
+| `/flag reason` | Reply to an ordinary member's group message to place a report in the admin inbox |
+| `/ask question` | Search that group's admin-approved FAQ; current membership is required |
+| `/events` | See group events and open the member RSVP page |
+| `/changelog` | Open public release notes and the roadmap |
+| `/feedback` | Open the feature/problem form, readable only by the bound Pilot owner |
+
+`/report` continues to configure daily/weekly moderation reports. **`/updates` continues to belong to the owner-only global broadcast workflow.** Group administrators cannot use the scheduler, integrations, reports or feedback to send a global announcement.
+
+Group menu commands for reports, FAQ, events, tools and link checking use Telegram's ephemeral command support. Selected admin reads can also be ephemeral. The incoming `message_id: 0` and reusable `ephemeral_message_id` are never used as ordinary moderation case IDs: these private interactions bypass message penalties and flood counting, while their Telegram update IDs still prevent retries from repeating commands. Responses use Bot API 10.3 `ephemeral_message_parameters.receiver_user_id`. A definite rejection can fall back to a private bot chat; an ambiguous outcome is not sent again. Sensitive text is never downgraded to a public group reply. Ordinary existing admin commands still deliver their durable results privately. Telegram does not guarantee ephemeral delivery, especially for offline users; `/dashboard` and `/tools` remain the durable routes.
+
+### Reports and the shared inbox
+
+Only a trusted Telegram reply can create report evidence. The HTTP API cannot accept an invented target message or reporter ID. The report stores the reason, at most 500 characters from the target, message metadata and the reporter identity. Current group admins can claim, dismiss, resolve, or explicitly delete the reported message. Claims coordinate concurrent admins; a claim whose owner lost admin authority can be recovered. A report never automatically bans, mutes or adds a strike. Admins, bots, anonymous senders and channel posts are protected; deletion rechecks the target's current role and the bot's permission.
+
+Reports are bounded to 3 per hour per member/group, 10 per day per member, 5 open reports per target, and 100 open reports per group. Reports and their operation evidence are eligible for removal after 30 days. A deletion with an unknown Telegram outcome cannot be blindly repeated.
+
+### Announcements, events and highlights
+
+Admins review the text, group, language, recurrence and **EAT (Africa/Dar_es_Salaam, UTC+3)** time before confirming a schedule. One-time, daily and weekly announcements are supported, with up to 20 active schedules per group. Recurring schedules expire after 90 days. Each due occurrence rechecks the creator's current admin status and the bot's current group status before sending. Removed admins' schedules pause. One-time work over 24 hours overdue expires; recurring work skips missed intervals without sending a backlog.
+
+Per-group Durable Object alarms serialize scheduled sends with moderation and admin changes. A durable occurrence record precedes each Telegram send. Known rate limits have bounded retries; ambiguous sends become `unknown` for review and do not automatically repeat. Cron wakes due groups after an outage, independently of the owner broadcast queue.
+
+Events contain an admin-supplied title, description, times and optional HTTPS resource. Members can select going, maybe or declined through the member view. Other members see totals and only their own response. No attendee roster is exposed by the integration API. Up to 50 events and 50 curated highlight entries per group are supported.
+
+Highlights contain only text/links deliberately entered by an admin. Choose entries for a one-time digest, or schedule a weekly digest of fresh, unconsumed entries from the previous seven days. Empty weeks are skipped. The bot does not archive the group's whole conversation to produce summaries.
+
+### Presets and configuration history
+
+Community, study, tech and business presets provide a starting point. Admins can copy selected settings, language and permanent whitelist rules from another group they currently manage, or restore a saved configuration. A server-generated preview shows the changes; its hash binds both the current target and proposed source state, so concurrent changes require a new preview.
+
+Configuration changes made from either workspace are captured before replacement. History is limited to the latest 100 snapshots per group and 90 days. Copy/restore never includes members, penalties, bans, reports, appeals, owner permissions, integration credentials or temporary link exceptions. Existing base allowlist rules and the 24-hour → 7-day → permanent policy remain intact.
+
+### Temporary links and raid controls
+
+Temporary exceptions allow **one exact HTTPS URL** until the chosen expiry, between one minute and 30 days. Up to 50 active temporary exceptions supplement the existing 100 permanent group rules. Expiry is checked at policy evaluation time; it does not depend on a cleanup cron and never revisits old messages. A forward still violates the forwarding rule even when its URL is allowed.
+
+Raid detection is opt-in and counts distinct accounts joining or producing confirmed spam actions within a configured 30–300-second window. It records a bounded warning, with a ten-minute duplicate alert cooldown; existing opted-in admin alerts can notify about it. It does not automatically punish accounts or lock the group. Quiet or disabled raid detection resolves its health warning.
+
+A current admin may deliberately activate a 1–60-minute emergency posting lockdown. This changes group default posting permissions without adding individual strikes or bans. Pilot records the previous and applied permission states. At expiry it restores only when the creator still has admin authority and the live permissions still match the applied state. A different human decision is preserved. An uncertain action or departed creator requires manual review; a new confirmation can recheck a `review` state without replaying an old action. All low-level permission comparisons normalize Telegram's optional booleans and documented defaults.
+
+### FAQ and Community Hubs
+
+Each group can hold up to 50 approved questions and answers with optional HTTPS sources. `/ask` performs deterministic search over this material; no AI service or API key is required. A current group member can read the group's FAQ. A hub starts **private**; an admin can publish it as public or unlisted at `/community/<slug>`. Unlisted means anyone with the URL can read it, while crawlers receive `noindex`.
+
+Only admin-selected introduction, rules, resources and join link are published. Sharing FAQ entries on the hub requires a separate explicit choice. Public projections exclude chat IDs, member IDs, reporter details, moderation history and private settings. There is no public connected-groups directory. Published hub responses use `no-store` so unpublishing is immediate. Group FAQ/hub configuration stays until an admin changes or removes it.
+
+### Scoped developer API
+
+The public guide is at **`/developers`**. An admin creates a token for one group and chooses one or more scopes:
+
+| Scope | Operation | Result |
+| --- | --- | --- |
+| `knowledge:read` | `knowledge` | Approved FAQ content, optionally filtered by `input.query` |
+| `events:read` | `events` | Event content and times, without participant identities or the creator's RSVP |
+| `drafts:write` | `draft` | A bounded announcement proposal in the admin review inbox |
+
+Call `POST /api/integrations` with `Authorization: Bearer YOUR_GROUP_TOKEN` and a JSON body containing `operation`, `input`, and—for draft creation—a fresh 16–80-character `requestId`. Draft input is `{ "title": "Release proposal", "text": "Text for an admin to review." }`. Credential scope determines the group; callers cannot supply an arbitrary group ID. An approved draft can prefill the scheduling form and still requires an admin's scheduling confirmation. Integrations never send a message by themselves.
+
+Tokens are shown once, stored only as SHA-256 digests, revocable, and valid for up to 90 days. Each group can have up to 10 active tokens. Every authorized API operation checks that the token creator is still a current group admin. Limits are 60 requests/minute/token, 20 draft proposals/day/token, and 50 pending drafts/group. Keep tokens in the integrating application's secret store; do not paste them into a group, a public URL or source control. Expired/revoked credentials, scopes and current roles are enforced on the server.
+
+### Additional retention and public information
+
+| Data | Retention |
+| --- | --- |
+| Completed/cancelled/paused/unknown schedules | Eligible 30 days after last update |
+| Scheduled-delivery evidence, curated highlights and operations audit | Eligible after 30 days |
+| Events and their RSVP responses | Eligible 30 days after the event's end; RSVPs cascade with event removal |
+| Configuration snapshots | Latest 100 per group, up to 90 days |
+| Expired temporary allowances | Stop applying immediately; eligible for cleanup after one day |
+| Raid account signals | Eligible after 24 hours |
+| Raid warnings | Eligible after 30 days |
+| Integration draft proposals | Eligible after 30 days |
+| Expired integration-token digests/metadata | Eligible 30 days after expiry |
+| Integration rate counters | Eligible after one day |
+| Feature/problem feedback | Eligible after 90 days; bound owner only |
+
+Daily sweeps are bounded, so physical deletion of large backlogs may require multiple runs. Read queries apply their retention windows independently. `/updates`, `/roadmap` and `/developers` are bilingual indexable pages included in the sitemap; `/tools` remains `noindex` and its data authenticated. Roadmap items describe possibilities without promised release dates. AI-generated answers, automatic RSS/GitHub imports, and outbound third-party webhooks are not enabled in this release; the curated FAQ and scoped API operate immediately without additional accounts, credentials or services.
+
 ## Development and validation
 
 Node 24 is recommended (Node 22.13+ provides the SQLite API used by tests).

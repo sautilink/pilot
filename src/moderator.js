@@ -6,6 +6,7 @@ import { createControlStore } from './control-store.js';
 import { createControlService } from './control-service.js';
 import { createGuardrails } from './guardrails.js';
 import { createBroadcastStore } from './broadcast-store.js';
+import { createToolsCommands } from './tools-commands.js';
 
 export const RULES = '<b>🛡 SautiLink Pilot</b>\nGroup lenye utulivu, mazungumzo yenye nafasi.\n\nLinks zisizoruhusiwa na ujumbe wa forward huondolewa.\nAdhabu: saa 24 → siku 7 → ban ya kudumu.\n\nTumia /rules kuona sheria za members, au fungua bot faraghani kwa mwongozo.';
 const ENGLISH_RULES = '<b>🛡 SautiLink Pilot</b>\nA calmer group. More room for conversation.\n\nUnapproved links and forwarded messages are removed.\nPenalties: 24 hours → 7 days → permanent ban.\n\nUse /rules for member rules, or open the bot privately for a guide.';
@@ -14,7 +15,7 @@ const validId = id => Number.isSafeInteger(Number(id)) && Number(id) !== 0;
 const userId = id => validId(id) && Number(id) > 0;
 const eventTime = m => Number(m.edit_date || m.date || 0);
 
-export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),dispatchControl,appUrl,owner,dispatchBroadcast,getIdentity}) {
+export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),dispatchControl,appUrl,owner,dispatchBroadcast,getIdentity,tools}) {
   const store=createStore(db);
   const controlStore=createControlStore(db),control=createControlService({db,api,clock});
   let identity;
@@ -27,6 +28,8 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
   const guards=createGuardrails({db,store,controlStore,api,clock,me,say});
   const broadcastRecords=createBroadcastStore(db);
   const experience=createBotExperience({db,store,api,clock,me,say,control,controlStore,dispatchControl,appUrl,owner,dispatchBroadcast});
+  const toolCommands=tools?createToolsCommands({db,api,tools,me,clock,baseUrl:new URL(appUrl||'https://pilot.sautilink.com/app').origin}):null;
+  const observe=signal=>tools?.governance.observeSignal(signal).catch(()=>{});
 
   async function notice(chat,text,extra={}) {
     const group=await store.group(chat), now=clock();
@@ -201,10 +204,17 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
     } else if(update.chat_member || update.my_chat_member) {
       await membership(update);
       await guards.membership(update.chat_member || update.my_chat_member);
+      const change=update.chat_member,joining=change?.new_chat_member;
+      if(change&&['member','restricted'].includes(joining?.status)&&!['creator','administrator','member','restricted'].includes(change.old_chat_member?.status)&&!joining.user?.is_bot)await observe({chatId:change.chat.id,userId:joining.user?.id,kind:'join',id:`${joining.user?.id}:${change.date}`,at:change.date});
       status='membership';
     } else {
       const message=update.message || update.edited_message;
       if(message && validId(message.chat?.id) && Number.isSafeInteger(message.message_id)) {
+        if(Number.isSafeInteger(message.ephemeral_message_id)&&message.ephemeral_message_id>0) {
+          // Ephemeral IDs can be reused and ordinary message_id is zero. These
+          // private commands must never create moderation cases or flood counts.
+          if(update.message&&(await toolCommands?.handle(message,update.update_id)||await experience.handleCommand(message,update.update_id,{updateChecked:true})))status='command';
+        } else if(message.message_id>0) {
         // An edit is re-evaluated for violations but can never re-run an admin command.
         const isGroup=['group','supergroup'].includes(message.chat.type);
         if(isGroup && message.chat.id<0) {
@@ -217,7 +227,7 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
             await broadcastRecords.recordMembership(message.migrate_from_chat_id,'left',eventTime(message),update.update_id);
           }
         }
-        const rules=isGroup ? await controlStore.rules(message.chat.id) : [];
+        const rules=isGroup ? await controlStore.rules(message.chat.id,clock()) : [];
         const groupViolation=isGroup && analyzeMessage(message,rules).reasons.length>0;
         let optionalAction=null;
         if(isGroup && !groupViolation) {
@@ -227,12 +237,14 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
           optionalAction=await guards.commandSpam(message,settings);
           if(update.message) {
             if(!optionalAction) optionalAction=await guards.flood(message,settings);
-            for(const user of message.new_chat_members || []) await guards.welcome(message.chat.id,user,Number(message.date || clock()),settings);
+            for(const user of message.new_chat_members || []) {await guards.welcome(message.chat.id,user,Number(message.date || clock()),settings);if(!user.is_bot)await observe({chatId:message.chat.id,userId:user.id,kind:'join',id:`${user.id}:${message.date}`,at:message.date});}
           }
         }
         if(optionalAction) status=optionalAction;
-        else if(update.message && !groupViolation && await experience.handleCommand(message,update.update_id,{updateChecked:true})) status='command';
+        else if(update.message && !groupViolation && (await toolCommands?.handle(message,update.update_id)||await experience.handleCommand(message,update.update_id,{updateChecked:true}))) status='command';
         else status=await enforce(message,update,rules);
+        if(isGroup&&['confirmed','command_spam','flood'].includes(status)&&!message.sender_chat)await observe({chatId:message.chat.id,userId:message.from?.id,kind:'spam',id:message.message_id,at:message.date});
+        }
       }
     }
     // A ban can succeed while its HTTP response is lost. Telegram must retry

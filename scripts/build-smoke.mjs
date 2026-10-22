@@ -128,7 +128,7 @@ try {
   assert.equal(typeof worker.fetch, 'function', 'Built Worker export exists');
   assert.equal(typeof GroupCoordinator, 'function', 'Durable Object named export survives bundling');
   let scriptsExecuted = 0;
-  for (const path of ['/', '/privacy', '/setup', '/app']) {
+  for (const path of ['/', '/privacy', '/setup', '/app', '/tools', '/updates', '/roadmap', '/developers']) {
     const href = `https://pilot.sautilink.com${path}?lang=en`;
     const response = await worker.fetch(new Request(href), {}, { waitUntil() { throw new Error('Unexpected background work while rendering a public page'); } });
     assert.equal(response.status, 200, `${path}: compiled Worker renders successfully`);
@@ -136,7 +136,7 @@ try {
     const html = await response.text();
     const scripts = inlineScripts(html);
     assert.equal(scripts.filter(script => script.theme).length, 1, `${path}: one executable theme script`);
-    assert.ok(scripts.length >= (path === '/privacy' ? 1 : 2), `${path}: page client script is present`);
+    assert.ok(scripts.length >= (['/','/setup','/app','/tools'].includes(path) ? 2 : 1), `${path}: page client script is present`);
     for (const readyState of ['loading', 'complete']) {
       const label = `${path} (${readyState})`;
       const h = browserFixture(html, href, readyState);
@@ -158,9 +158,10 @@ try {
       } else if (path === '/setup') {
         h.document.getElementById('generate-key').dispatch('click');
         assert.match(h.document.getElementById('generated-key').value, /^[a-f0-9]{64}$/, `${label}: browser key generation works`);
-      } else if (path === '/app') {
-        assert.equal(h.document.getElementById('login').hidden, false, `${label}: visitor welcome remains visible`);
-        assert.equal(h.document.getElementById('app').hidden, true, `${label}: private workspace requires Telegram`);
+      } else if (path === '/app' || path === '/tools') {
+        const tools=path==='/tools';
+        assert.equal(h.document.getElementById(tools?'tools-welcome':'login').hidden, false, `${label}: visitor welcome remains visible`);
+        assert.equal(h.document.getElementById(tools?'tools-app':'app').hidden, true, `${label}: private workspace requires Telegram`);
         const language = h.document.querySelectorAll('[data-lang]').find(node => node.dataset.lang === 'sw');
         assert.equal(language.listenerCount('click'), 1, `${label}: dashboard client initialized`);
         language.dispatch('click');
@@ -172,7 +173,7 @@ try {
     }
   }
   assert.equal(networkCalls, 0, 'The build smoke must stay entirely offline');
-  console.log(`Built browser scripts verified: 4 pages, 2 document states, ${scriptsExecuted} inline executions; theme, URL, aria, simulator, setup and dashboard controls passed without network access.`);
+  console.log(`Built browser scripts verified: 8 pages, 2 document states, ${scriptsExecuted} inline executions; theme, URL, aria, simulator, setup, dashboard and Community tools controls passed without network access.`);
 } finally {
   globalThis.fetch = originalFetch;
 }

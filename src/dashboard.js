@@ -150,6 +150,11 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
     }
     if (state.groups.length) inner.append(navigationGroup(groupItems, t('Usimamizi wa group', 'Group management'), 'sidebar-groups'));
     inner.append(navigationGroup([['mystatus', t('Matukio yangu', 'My cases')], ['checklink', t('Kagua link', 'Check a link')]], t('Zana zako', 'Your tools'), 'sidebar-personal'));
+    const toolsLink=el('a','nav-button');append(toolsLink,icon('settings'),el('span','',t('Zana za jumuiya','Community tools')));
+    const toolsUrl=new URL('/tools',location.href);toolsUrl.searchParams.set('lang',language);if(state.chatId)toolsUrl.searchParams.set('chat',state.chatId);
+    const selectedTheme=new URL(location.href).searchParams.get('theme');if(['light','dark'].includes(selectedTheme))toolsUrl.searchParams.set('theme',selectedTheme);
+    // Signed launch data stays in a fragment on these two trusted Mini App routes.
+    toolsUrl.hash=new URL(location.href).hash;toolsLink.href=toolsUrl.pathname+toolsUrl.search+toolsUrl.hash;toolsLink.referrerPolicy='no-referrer';inner.append(toolsLink);
     const foot = el('div', 'sidebar-foot'); append(foot, el('p', '', t('Admins na channel iliyo linked huheshimiwa. Kila group lina historia yake.', 'Admins and the linked channel are respected. Each group has its own history.')), append(el('a'), document.createTextNode(t('Fungua mwongozo', 'Open the guide')), icon('external'))); foot.lastChild.href = 'https://t.me/sautilinkpilotbot?start=help'; append(nav, inner, foot);
   }
   function renderGroupSelect() {

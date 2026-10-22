@@ -37,7 +37,7 @@ test('robots advertises the sitemap and keeps public assets plus noindex shells 
 test('sitemap contains only canonical public language versions with reciprocal alternates', async () => {
   const xml = await (await handleFetch(request('/sitemap.xml?theme=dark&tgWebAppData=private'), {})).text();
   const locations = [...xml.matchAll(/<loc>([^<]+)<\/loc>/g)].map(match => match[1]);
-  assert.deepEqual(locations, [`${BASE}/`, `${BASE}/?lang=sw`, `${BASE}/privacy`, `${BASE}/privacy?lang=sw`]);
+  assert.deepEqual(locations, ['/', '/privacy', '/updates', '/roadmap', '/developers'].flatMap(path=>[`${BASE}${path}`,`${BASE}${path}?lang=sw`]));
   assert.deepEqual(locations, publicSeoUrls());
   const entries = [...xml.matchAll(/<url>([\s\S]*?)<\/url>/g)].map(match => match[1]);
   for (const entry of entries) {
@@ -46,17 +46,17 @@ test('sitemap contains only canonical public language versions with reciprocal a
     assert.match(entry, /hreflang="sw"/);
     assert.match(entry, /hreflang="x-default"/);
   }
-  assert.doesNotMatch(xml, /\/app|\/setup|\/api|\/telegram|\/health|lang=en|theme=|tgWebAppData|<lastmod>|<priority>|<changefreq>/);
+  assert.doesNotMatch(xml, /\/app|\/tools|\/community\/|\/setup|\/api|\/telegram|\/health|lang=en|theme=|tgWebAppData|<lastmod>|<priority>|<changefreq>/);
 });
 
 test('public HTML stays indexable while private shells, APIs, and missing routes stay noindex', async () => {
-  for (const path of ['/', '/?lang=sw', '/privacy', '/privacy?lang=sw', '/app', '/setup']) {
+  for (const path of ['/', '/?lang=sw', '/privacy', '/privacy?lang=sw', '/updates', '/roadmap?lang=sw', '/developers', '/app', '/setup', '/tools']) {
     const get = await handleFetch(request(path), {});
     const head = await handleFetch(request(path, { method: 'HEAD' }), {});
     assert.equal(get.status, 200);
     assert.equal(head.status, 200);
     assert.equal(await head.text(), '');
-    const indexable = !['/app', '/setup'].includes(path);
+    const indexable = !['/app', '/setup', '/tools'].includes(path);
     assert.equal(get.headers.get('X-Robots-Tag'), indexable ? 'index, follow' : 'noindex, nofollow');
     assert.equal(head.headers.get('X-Robots-Tag'), get.headers.get('X-Robots-Tag'));
     if (!indexable) assert.match(await get.text(), /<meta name="robots" content="noindex/);

@@ -1,5 +1,5 @@
 export const SEO_ORIGIN = 'https://pilot.sautilink.com';
-export const PUBLIC_SEO_PAGES = Object.freeze(['/', '/privacy']);
+export const PUBLIC_SEO_PAGES = Object.freeze(['/', '/privacy', '/updates', '/roadmap', '/developers']);
 
 const LOGO_URL = 'https://sautilink.com/logo.png';
 const ORGANIZATION_ID = 'https://www.sautilink.com/#organization';

@@ -106,7 +106,7 @@ function incidentText(row, language, personal = false) {
 }
 
 export function createFeatureCommands({ store, control, dispatchControl, appUrl = 'https://pilot.sautilink.com/app' }) {
-  async function render({ command, argument = '', from, language = 'sw', updateId }) {
+  async function render({ command, argument = '', from, language = 'sw', updateId, groupId }) {
     language = language === 'en' ? 'en' : 'sw';
     const t = labels[language];
     const page = (text, tab, chatId) => ({ text, reply_markup: rows(language, appUrl, tab, chatId) });
@@ -119,7 +119,7 @@ export function createFeatureCommands({ store, control, dispatchControl, appUrl 
     try {
       if (command === 'checklink') {
         if (argument.length > 4096) return page(t.tooLong, 'checker');
-        const result = await control.query({ actor, view: 'checklink', input: { text: argument } });
+        const result = await control.query({ actor, ...(groupId?{chatId:groupId}:{}), view: 'checklink', input: { text: argument } });
         const destinations = Array.isArray(result.destinations) ? result.destinations : [];
         if (!destinations.length) return page(`${t.checkTitle}\n\n${t.noLinks}`, 'checker');
         const entries = destinations.slice(0, 8).map(item => {

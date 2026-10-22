@@ -1,7 +1,7 @@
 // Latency records deliberately contain only bounded categories and durations.
 // Telegram URLs, parameters, chat/user/update identifiers and message content
 // never enter this helper. It samples ordinary work and always records slow work.
-const ROUTES = new Set(['telegram', 'control', 'broadcast', 'broadcast_wake', 'broadcast_alarm']);
+const ROUTES = new Set(['telegram', 'control', 'broadcast', 'broadcast_wake', 'broadcast_alarm', 'tools', 'tools_wake', 'integration']);
 export function createRequestTiming(route, {
   now = () => performance.now(), sample = () => Math.random() < 0.02,
   report = record => console.info('pilot_performance', record),

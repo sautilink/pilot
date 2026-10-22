@@ -99,7 +99,7 @@ export function explainUrl(value, rules = []) {
   }
   const base = baseReason(parsed);
   if (base) return { ...result, allowed: true, reason: base, source: 'base' };
-  for (const original of Array.isArray(rules) ? rules.slice(0, 100) : []) {
+  for (const original of Array.isArray(rules) ? rules.slice(0, 150) : []) {
     let rule;
     try { rule = normalizeWhitelistRule(original); } catch { continue; }
     const matches = rule.kind === 'domain' ? parsed.hostname === rule.value

@@ -10,6 +10,11 @@ import {operationalHealth} from './monitoring.js';
 import {createOwnerAuth} from './owner-auth.js';
 import {iconAssetResponse} from './public-icons.js';
 import {seoDiscoveryResponse} from './seo-discovery.js';
+import {renderToolsPage} from './tools-page.js';
+import {handleToolsApi,handleIntegrationApi} from './tools-api.js';
+import {createCommunityService} from './community-service.js';
+import {renderCommunityHub} from './community-pages.js';
+import {renderReleasePage} from './release-pages.js';
 
 const SECURITY_HEADERS={
   'X-Content-Type-Options':'nosniff',
@@ -143,6 +148,15 @@ export async function handleFetch(request,env,ctx) {
     if(readPage && path==='/') return html(renderHome({...await publicState(env),lang}),{head});
     if(readPage && path==='/privacy') return html(renderPrivacy(lang),{head});
     if(readPage && path==='/app') return appHtml(renderDashboard({lang}),{head});
+    if(readPage && path==='/tools') return appHtml(renderToolsPage({lang}),{head});
+    if(readPage && ['/updates','/roadmap','/developers'].includes(path)) return html(renderReleasePage(path,{lang}),{head});
+    if(readPage && /^\/community\/[a-z0-9][a-z0-9-]{2,46}[a-z0-9]$/.test(path)) {
+      if(!env.DB)return error('Haijapatikana.',404);
+      const hub=await createCommunityService({db:env.DB}).getPublicHub(path.slice('/community/'.length),{language:lang});
+      return hub?html(renderCommunityHub(hub,{lang}),{head,indexable:hub.visibility==='public'}):error('Haijapatikana.',404);
+    }
+    if(path==='/api/tools')return handleToolsApi(request,env);
+    if(path==='/api/integrations')return handleIntegrationApi(request,env);
     if(path==='/api/pilot') {
       const result=await handleDashboardApi(request,env);
       result.headers.set('X-Robots-Tag','noindex, nofollow');

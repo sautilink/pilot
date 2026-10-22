@@ -3,6 +3,7 @@ import { createControlStore, CONTROL_DEFAULTS, safeAuditDetails } from './contro
 import { detectLinks, explainUrl, normalizeWhitelistRule } from './policy.js';
 import { createGuardrailStore } from './guardrail-store.js';
 import { normalizeCommandExceptions } from './command-spam.js';
+import { rememberConfiguration } from './configuration-history.js';
 
 export class ControlError extends Error {
   constructor(code, status = 400) {
@@ -48,7 +49,7 @@ function template(value, max, names) {
   return result;
 }
 
-function normalizeSettings(input) {
+export function normalizeSettings(input) {
   allowedKeys(input, Object.keys(CONTROL_DEFAULTS), 'invalid_settings');
   const result = {};
   const numbers = { flood_limit: [3, 30], flood_window: [5, 60], flood_mute_seconds: [60, 3600] };
@@ -227,7 +228,7 @@ export function createControlService({ db, api, clock = () => Math.floor(Date.no
         try { current = await member(chat, user); } catch { current = null; }
         const permitted = admin(current) || current?.status === 'member' || (current?.status === 'restricted' && current.is_member === true);
         if (!permitted && !await store.first('SELECT id FROM incidents WHERE chat_id=? AND user_id=? LIMIT 1', String(chat), String(user))) fail('forbidden', 403);
-        rules = await store.rules(chat);
+        rules = await store.rules(chat, clock());
         scope = { type: 'group', chatId: chat };
       }
       return { ok: true, scope, destinations: detectLinks({ text }).map(value => explainUrl(value, rules)), forwardWarning: true };
@@ -245,7 +246,7 @@ export function createControlService({ db, api, clock = () => Math.floor(Date.no
     return {
       ok: true, group,
       moderation: { enabled: !!moderation.enabled, permissionsComplete: admin(own) && !!own.can_delete_messages && !!own.can_restrict_members },
-      language: await base.getLanguage('group', chat), settings: await store.settings(chat), rules: await store.rules(chat),
+      language: await base.getLanguage('group', chat), settings: await store.settings(chat), rules: await store.rules(chat, clock()),
       subscription: await store.subscription(user, chat), incidents: await cases('i.chat_id=?', [String(chat)]),
       appeals: await store.all('SELECT id,incident_id,user_id,message,status,decision,reviewed_by,created_at,updated_at FROM pilot_appeals WHERE chat_id=? AND created_at>=? ORDER BY updated_at DESC,rowid DESC LIMIT 50', String(chat), since),
       audit, stats: await stats(chat), joins: await guards.joins(chat),
@@ -354,6 +355,7 @@ export function createControlService({ db, api, clock = () => Math.floor(Date.no
     const tracker = { started: false };
     try {
       const now = clock();
+      if (['configure','whitelist_add','whitelist_remove'].includes(action)) await rememberConfiguration(db,chat,user,`before:${action}`,now);
       if (action === 'configure') {
         const settings = { ...await store.settings(chat), ...clean.settings };
         const statements = [db.prepare('INSERT INTO pilot_group_settings(chat_id,settings_json,updated_at) VALUES(?,?,?) ON CONFLICT(chat_id) DO UPDATE SET settings_json=excluded.settings_json,updated_at=excluded.updated_at').bind(String(chat), JSON.stringify(settings), now)];
