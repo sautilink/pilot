@@ -50,7 +50,9 @@ CREATE TABLE IF NOT EXISTS pilot_subscriptions (
 `;
 
 export const CONTROL_DEFAULTS = Object.freeze({
-  welcome_enabled: false, welcome_sw: '', welcome_en: '', rules_sw: '', rules_en: '',
+  welcome_enabled: false, welcome_sw: '', welcome_en: '',
+  welcome_button_label: '', welcome_button_url: '', welcome_delete_seconds: 0,
+  rules_sw: '', rules_en: '',
   notice_template: 'detailed', notice_sw: '', notice_en: '',
   flood_enabled: false, flood_limit: 8, flood_window: 10, flood_action: 'delete', flood_mute_seconds: 300,
   command_spam_enabled: true, command_spam_allowlist: '',

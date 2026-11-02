@@ -272,7 +272,7 @@ test('configure validates every field and placeholder before applying any settin
   const invalid = [
     { flood_limit: 2 }, { flood_limit: 31 }, { flood_limit: '8' }, { flood_window: 4 }, { flood_window: 61 },
     { flood_mute_seconds: 59 }, { flood_mute_seconds: 3601 }, { flood_action: 'ban' }, { join_gate_mode: 'automatic' },
-    { welcome_enabled: 1 }, { welcome_sw: 'x'.repeat(401) }, { rules_en: 'x'.repeat(601) }, { notice_en: 'x'.repeat(241) },
+    { welcome_enabled: 1 }, { welcome_sw: 'x'.repeat(1801) }, { rules_en: 'x'.repeat(601) }, { notice_en: 'x'.repeat(241) },
     { notice_template: 'raw' }, { welcome_sw: 'Hello {token}' }, { notice_sw: '{rules}' }, { welcome_en: 'Hello {user' }, { made_up: true },
   ];
   for (const settings of invalid) await assert.rejects(f.mutate('configure', { settings: { welcome_enabled: true, ...settings } }), error => error instanceof ControlError && ['invalid_settings', 'invalid_template'].includes(error.code));

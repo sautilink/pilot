@@ -2,6 +2,7 @@ import {CONTROL_SCHEMA_SQL} from './control-store.js';
 import {GUARDRAIL_SCHEMA_SQL} from './guardrail-store.js';
 import {OWNER_SCHEMA_SQL} from './owner-auth.js';
 import {BROADCAST_SCHEMA_SQL} from './broadcast-store.js';
+import {WELCOME_EXPIRY_SCHEMA_SQL} from './welcome-expiry.js';
 import {ensureSchemaFamily, applyCompleteSchema} from './schema-ready.js';
 
 // D1 is the source of truth; a Durable Object serializes each chat's actions.
@@ -88,7 +89,7 @@ CREATE TABLE IF NOT EXISTS processed_updates (
   update_id INTEGER PRIMARY KEY, processed_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS processed_age ON processed_updates(processed_at);
-` + EXPERIENCE_SCHEMA_SQL + LINK_WARNING_SCHEMA_SQL + RESTRICTION_SCHEMA_SQL + CONTROL_SCHEMA_SQL + GUARDRAIL_SCHEMA_SQL + OWNER_SCHEMA_SQL + BROADCAST_SCHEMA_SQL;
+` + EXPERIENCE_SCHEMA_SQL + LINK_WARNING_SCHEMA_SQL + RESTRICTION_SCHEMA_SQL + CONTROL_SCHEMA_SQL + GUARDRAIL_SCHEMA_SQL + OWNER_SCHEMA_SQL + BROADCAST_SCHEMA_SQL + WELCOME_EXPIRY_SCHEMA_SQL;
 
 export const applySchema = db => applyCompleteSchema(db, SCHEMA_SQL);
 
