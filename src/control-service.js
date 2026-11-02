@@ -4,6 +4,7 @@ import { detectLinks, explainUrl, normalizeWhitelistRule } from './policy.js';
 import { createGuardrailStore } from './guardrail-store.js';
 import { normalizeCommandExceptions } from './command-spam.js';
 import { rememberConfiguration } from './configuration-history.js';
+import { validateWelcomeTemplate, WELCOME_DELETE_OPTIONS } from './templates.js';
 
 export class ControlError extends Error {
   constructor(code, status = 400) {
@@ -67,9 +68,28 @@ export function normalizeSettings(input) {
       result[key] = value;
     } else if (key === 'command_spam_allowlist') {
       try { result[key] = normalizeCommandExceptions(value); } catch { fail('invalid_settings'); }
-    } else if (key.startsWith('welcome_')) result[key] = template(value, 400, ['user', 'group', 'rules']);
+    } else if (key==='welcome_sw'||key==='welcome_en') {
+      try { result[key]=validateWelcomeTemplate(value); } catch { fail('invalid_template'); }
+    } else if (key==='welcome_delete_seconds') {
+      if(!WELCOME_DELETE_OPTIONS.includes(value)) fail('invalid_settings');
+      result[key]=value;
+    } else if (key==='welcome_button_label') {
+      result[key]=boundedString(value,48,'invalid_settings',{empty:true});
+    } else if (key==='welcome_button_url') {
+      if(typeof value!=='string'||value.length>350) fail('invalid_settings');
+      if(!value.trim())result[key]='';
+      else {
+        let url;try {url=new URL(value);} catch{fail('invalid_settings');}
+        if(url.protocol!=='https:'||url.username||url.password||!url.hostname||url.port||/[<>\s]/.test(value)) fail('invalid_settings');
+        result[key]=url.href;
+      }
+    }
     else if (key.startsWith('notice_')) result[key] = template(value, 240, ['user', 'reason', 'duration', 'group']);
     else result[key] = boundedString(value, 600, 'invalid_settings', { empty: true });
+  }
+  if(result.welcome_button_label!==undefined||result.welcome_button_url!==undefined) {
+    // Blank label/URL together means the built-in Rules button.
+    // Partial changes are allowed because settings are merged with existing data.
   }
   return result;
 }
