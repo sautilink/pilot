@@ -192,7 +192,7 @@ export function formatBanCheck(result,{language='sw',groupTitle=''}={}) {
   const en=language==='en';
   if(result.invalid) return en?'Use <code>/bancheck USER_ID</code> with a numeric Telegram ID.':'Tumia <code>/bancheck USER_ID</code> na ID ya namba ya Telegram.';
   const lines=[
-    en?'<b>🛡 Pilot · Single-member ban check</b>':'<b>🛡 Pilot · Ukaguzi wa ban ya member</b>',
+    en?'<b>🛡 Pilot · Member penalties check</b>':'<b>🛡 Pilot · Ukaguzi wa adhabu za member</b>',
     '<b>'+escapeHtml(String(groupTitle).slice(0,100))+'</b>',
     (en?'User':'Mtumiaji')+': <code>'+result.userId+'</code>'
   ];
@@ -206,7 +206,9 @@ export function formatBanCheck(result,{language='sw',groupTitle=''}={}) {
     when(pilot,language);
   lines.push(
     '',(en?'Pilot recorded ban':'Ban iliyorekodiwa na Pilot')+': '+recorded,
-    (en?'Ban strike history':'Historia ya makosa ya ban')+': '+result.strikes+'/3',
+    (en?'Ban strike history':'Historia ya makosa ya ban')+': '+result.strikes+'/3'
+  );
+  if(result.incidentStatus!=='unknown') lines.push(
     (en?'Last ban incident status':'Hali ya tukio la ban')+': '+result.incidentStatus
   );
   const restriction=result.restriction||{level:0,until:0};
