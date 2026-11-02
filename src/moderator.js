@@ -217,11 +217,13 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
       // incidents. Preserve existing bans and continue their progression only
       // after this member has used the new per-group link warning.
       const warning=violation.blockedLinks.length>0 && !snapshot.linkWarning?.delivered_at;
-      // Forward-only retains existing policy; prohibited links (including a
-      // forwarded link) use the educational restriction ladder, unless the
-      // member already has a confirmed legacy ban strike.
+      // Forward-only retains existing policy. Every member with a delivered
+      // link warning must complete the five restriction stages before the
+      // next prohibited link can trigger a ban, EVEN with historical ban
+      // strikes (1/3, 2/3 or 3/3). Keep those strikes as the later ban
+      // escalation history; never use them to bypass restriction stages.
       const restrict=!warning && violation.blockedLinks.length>0 &&
-        state.strikes===0 && (restriction?.level||0)<5;
+        (restriction?.level||0)<5;
       const strike=warning ? 0 : restrict ? -(restriction.level+1) : Math.min(3,state.strikes+1);
       const duration=warning ? 0 : restrict ? restrictionDuration(-strike) : banDuration(strike);
       row=await store.plan({id:incidentId,chat_id:chat,user_id:user,message_id:message.message_id,event_at:time,created_at:now,strike,until_date:duration ? now+duration : 0,reasons:JSON.stringify(violation.reasons)});
@@ -232,6 +234,16 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
       // requirement before sending a ban. Uncertain or completed bans reconciled
       // above retain their original meaning and must never be blindly replayed.
       await store.run("UPDATE incidents SET strike=0,until_date=0 WHERE id=? AND status='planned' AND NOT EXISTS(SELECT 1 FROM member_link_warnings w WHERE w.chat_id=incidents.chat_id AND w.user_id=incidents.user_id AND w.delivered_at>0)",row.id);
+      row=await store.incident(row.id);
+    }
+    if(row.status==='planned' && row.strike>0 && violation.blockedLinks.length>0 &&
+      snapshot.linkWarning?.delivered_at>0 && (restriction?.level||0)<5) {
+      // A queued pre-fix incident may contain an old positive ban plan.
+      // If Telegram has not yet been called, safely translate it to the
+      // new restriction stage. Confirmed/uncertain bans are NEVER rewritten.
+      const level=(restriction?.level||0)+1;
+      await store.run("UPDATE incidents SET strike=?,until_date=? WHERE id=? AND status='planned' AND strike>0",
+        -level,now+restrictionDuration(level),row.id);
       row=await store.incident(row.id);
     }
     // Fresh verification immediately before destructive actions, never cached admin lists.

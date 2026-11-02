@@ -41,7 +41,7 @@ export function formatAnnouncement(row,message,success=true,language='sw',settin
     const title=en?'🔇 MEMBER RESTRICTED':'🔇 MEMBER AMEWEKEWA RESTRICTION';
     const reason=en?'Prohibited link or forwarded link was removed.':'Link isiyoruhusiwa au link iliyoforward imefutwa.';
     const next=level===5
-      ? (en?'Next prohibited link after this restriction: a 24-hour ban, then 7 days, then permanent.':'Link nyingine isiyoruhusiwa baada ya restriction hii: ban ya saa 24, kisha siku 7, halafu permanent.')
+      ? (en?'After all five restrictions, the next prohibited link follows the ban sequence (24 hours, 7 days, permanent), with any earlier ban strikes preserved.':'Baada ya restrictions tano, link nyingine isiyoruhusiwa huanza au huendeleza bans (saa 24, siku 7, permanent), huku ban strikes za zamani zikihifadhiwa.')
       : (en?'Further prohibited links after each restriction ends advance the restriction ladder.':'Link nyingine isiyoruhusiwa kila restriction ikiisha itaongeza hatua ya restriction.');
     const summary=en?'The member stays in this group and may read posts, but cannot send messages or media until the restriction ends.':'Member anabaki ndani ya group na anaweza kusoma posts, lakini hawezi kutuma ujumbe wala media hadi restriction iishe.';
     const label=en?'Stage':'Hatua';
