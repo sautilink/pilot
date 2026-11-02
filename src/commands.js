@@ -162,7 +162,7 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
   };
   const featureLink = (bot, command, chat = null) => {
     const username = /^[A-Za-z0-9_]{5,32}$/.test(bot.username || '') ? bot.username : 'sautilinkpilotbot';
-    const context = chat != null && /^-[1-9]\\d{0,15}$/.test(String(chat)) ? `_${chat}` : '';
+    const context = chat != null && /^-[1-9]\d{0,15}$/.test(String(chat)) ? `_${chat}` : '';
     return `https://t.me/${username}?start=feature_${command}${context}`;
   };
   async function featurePointer(message, bot, language, command, chat = null) {
@@ -314,7 +314,7 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     let language = initialLanguage;
 
     const deepFeature = command === 'start' && message.chat.type === 'private' && peer(message)
-      ? /^feature_(dashboard|checklink|mystatus|appeal|history|appeals|settings|stats|alerts|report|whitelist)(?:_(-[1-9]\\d{0,15}))?$/.exec(argument || '')
+      ? /^feature_(dashboard|checklink|mystatus|appeal|history|appeals|settings|stats|alerts|report|whitelist)(?:_(-[1-9]\d{0,15}))?$/.exec(argument || '')
       : null;
     if (deepFeature) {
       const requested = deepFeature[1], requestedChat = deepFeature[2];
