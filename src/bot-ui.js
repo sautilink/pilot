@@ -212,6 +212,7 @@ export function getAdminCommands(language = 'sw') {
     { command: 'report', description: 'Choose your daily or weekly report' },
     { command: 'language', description: 'Change the group language' },
     { command: 'status', description: 'Receive group status privately', is_ephemeral: true },
+    { command: 'bans', description: 'View Pilot-known banned users privately' },
     { command: 'strikes', description: 'Check a member’s strikes in this group' },
     { command: 'forgive', description: 'Clear a member’s strike history' },
     { command: 'unban', description: 'Remove a ban and keep strike history' },
