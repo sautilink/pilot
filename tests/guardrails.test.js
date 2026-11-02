@@ -26,11 +26,6 @@ async function fixture(t,settings={}) {
   }};
   const store=createStore(db),controlStore=createControlStore(db),clock=()=>now;
   await store.group(GROUP);await store.settings({ready:'1',ready_since:START-1});
-  // Ban regression cases use a member already given the one-time link
-  // education warning. Fresh-user warning coverage lives in moderator tests.
-  await store.member(GROUP,USER);
-  await store.run('UPDATE members SET last_incident=? WHERE chat_id=? AND user_id=?',
-    'previous-link-warning',String(GROUP),String(USER));
   await controlStore.ensure();
   const configure=async(value,chat=GROUP)=>db.prepare('INSERT INTO pilot_group_settings VALUES(?,?,?) ON CONFLICT(chat_id) DO UPDATE SET settings_json=excluded.settings_json,updated_at=excluded.updated_at').bind(String(chat),JSON.stringify(value),now).run();
   await configure(settings);
@@ -41,6 +36,12 @@ async function fixture(t,settings={}) {
     join(extra={}){roles.set(`${GROUP}:${USER}`,{status:'left'});return {update_id:sequence++,chat_join_request:{chat:{id:GROUP,type:'supergroup',title:'Group'},from:{id:USER,first_name:'Juma'},user_chat_id:USER,date:now,...extra}};},
     callback(row,{user=USER,answer=row.answer,chat=USER}={}){return {update_id:sequence++,callback_query:{id:`q-${sequence}`,from:{id:user,language_code:'en'},data:`pilot:join:${row.id}:${answer}`,message:{message_id:row.telegram_message_id,date:now,chat:{id:chat,type:'private'},from:{id:BOT,is_bot:true}}}};},
   };
+}
+
+async function warnedMember(f,chat=GROUP) {
+  await f.store.member(chat,USER);
+  await f.store.run('UPDATE members SET last_incident=? WHERE chat_id=? AND user_id=?',
+    'previous-link-warning',String(chat),String(USER));
 }
 
 test('an admin stays exempt when the independent bot role lookup fails',async t=>{
@@ -99,6 +100,7 @@ test('flood mute respects human restrictions and admin, anonymous, and linked-ch
 
 test('a primary link violation retains the original escalation even when flood control is enabled',async t=>{
   const f=await fixture(t,{flood_enabled:true,flood_limit:3,flood_window:10,flood_action:'mute'});
+  await warnedMember(f);
   for(let i=0;i<3;i++) await f.moderator.handle(f.message());
   await f.moderator.handle(f.message({text:'https://forbidden.example'}));
   assert.equal(f.of('banChatMember').length,1);assert.equal(f.of('banChatMember')[0].p.until_date,START+86400);
@@ -107,6 +109,7 @@ test('a primary link violation retains the original escalation even when flood c
 
 test('per-group whitelist is applied by the real moderator and does not allow forwarded messages',async t=>{
   const f=await fixture(t);
+  await warnedMember(f); await warnedMember(f,OTHER);
   await f.db.prepare('INSERT INTO pilot_whitelist_rules VALUES(?,?,?,?,?,?)').bind('rule-one',String(GROUP),'domain','example.com',String(ADMIN),START).run();
   await f.moderator.handle(f.message({text:'https://example.com/path'}));assert.equal(f.of('banChatMember').length,0);
   await f.moderator.handle(f.message({text:'https://example.com/path',forward_origin:{type:'hidden_user',date:START-1,sender_user_name:'Person'}}));
@@ -197,7 +200,8 @@ test('a manual unmute clears the old flood episode and queued messages cannot re
 });
 
 test('malformed success payloads never confirm a ban or an undelivered deletion',async t=>{
-  const f=await fixture(t);f.hooks.set('deleteMessage',()=>false);
+  const f=await fixture(t);
+  await warnedMember(f);f.hooks.set('deleteMessage',()=>false);
   await assert.rejects(f.moderator.handle(f.message({text:'https://forbidden.example'})));
   assert.equal(f.of('banChatMember').length,0);assert.equal(f.of('sendMessage').length,0);
   f.hooks.delete('deleteMessage');f.hooks.set('banChatMember',()=>false);
@@ -462,6 +466,7 @@ test('a clean edit delivered before its original webhook protects current text w
 
 test('long-code exceptions cannot exempt a forwarded code or concealed prohibited link',async t=>{
   const f=await fixture(t,{command_spam_allowlist:LONG_COMMAND,flood_enabled:true,flood_limit:3,flood_window:10,flood_action:'mute'});
+  await warnedMember(f);
   await f.moderator.handle(f.message({text:LONG_COMMAND,forward_origin:{type:'hidden_user',date:START-1,sender_user_name:'Person'}}));
   assert.equal(f.of('banChatMember').length,1);assert.equal((await f.store.member(GROUP,USER)).strikes,1);
   await f.moderator.handle(f.message({text:LONG_COMMAND,from:{id:USER+5},entities:[{type:'text_link',offset:0,length:LONG_COMMAND.length,url:'https://forbidden.example'}]}));
