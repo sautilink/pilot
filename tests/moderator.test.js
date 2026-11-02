@@ -69,10 +69,18 @@ class FakeTelegram {
   }
 }
 
-async function fixture(t) {
+async function fixture(t,{fresh=false}={}) {
   const db = new TestD1();
   await applySchema(db);
   t.after(() => db.close());
+  // Existing ban-path regression tests model members who already received
+  // their introductory link warning. Dedicated fresh=true tests verify
+  // the new user journey, including the full four-step sequence.
+  if(!fresh) for(const chat of [GROUP,OTHER_GROUP]) {
+    await createStore(db).member(chat,USER_ID);
+    await db.prepare('UPDATE members SET last_incident=? WHERE chat_id=? AND user_id=?')
+      .bind('previous-link-warning',String(chat),String(USER_ID)).run();
+  }
   const api = new FakeTelegram();
   let now = START;
   let updateId = 1;
