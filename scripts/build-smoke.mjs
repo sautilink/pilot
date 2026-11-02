@@ -152,7 +152,12 @@ try {
       checkTheme(h, label);
       if (path === '/') {
         h.document.getElementById('sim-run').dispatch('click');
-        assert.equal(h.document.getElementById('sim-count').textContent, '1 / 3', `${label}: built simulator works`);
+        assert.equal(h.document.getElementById('sim-count').textContent, '0 / 3', `${label}: first link adds no ban strike`);
+        assert.equal(h.document.getElementById('sim-outcome-title').textContent, 'Link warning. No ban.', `${label}: first link warns`);
+        assert.match(h.document.getElementById('sim-announcement').textContent, /@Juma.*another prohibited link will trigger a ban/, `${label}: warning tags the member and explains repetition`);
+        h.document.getElementById('sim-run').dispatch('click');
+        assert.equal(h.document.getElementById('sim-count').textContent, '1 / 3', `${label}: next link adds the first ban strike`);
+        assert.equal(h.document.getElementById('sim-outcome-title').textContent, 'Banned for 24 hours.', `${label}: next link starts the timed ban progression`);
         h.document.getElementById('sim-reset').dispatch('click');
         assert.equal(h.document.getElementById('sim-count').textContent, '0 / 3');
       } else if (path === '/setup') {

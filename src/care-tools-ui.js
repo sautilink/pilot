@@ -38,6 +38,7 @@ export function careToolsClient(h,doctorCopy) {
       checkbox(form,fields,'forwarded',t('Ujumbe umetumwa kwa Forward','This is a forwarded message'));
       field(form,fields,'sender',t('Anayetuma','Sender'),{value:'member',choices:[['member',t('Member wa kawaida','Ordinary member')],['admin','Admin'],['anonymous_admin',t('Admin asiyeonekana','Anonymous admin')],['linked_channel',t('Linked channel rasmi','Official linked channel')]]});
       field(form,fields,'priorStrikes',t('Makosa ya awali (mfano)','Previous strikes (hypothetical)'),{type:'number',value:0,min:0,step:1});fields.priorStrikes.max='100';
+      checkbox(form,fields,'linkWarned',t('Tayari amepewa onyo la link (mfano)','Already received a link warning (hypothetical)'),false);
       field(form,fields,'format',t('Muundo wa ujumbe','Message formatting'),{value:'plain',choices:[['plain',t('Kawaida','Plain text')],['code',t('Imeformat kama code','Code formatting')]]});
       field(form,fields,'messagesInWindow',t('Messages ndani ya flood window (hiari)','Messages in the flood window (optional)'),{type:'number',value:'',min:1,step:1});fields.messagesInWindow.max='100';
       field(form,fields,'commandMode',t('Jaribu chaguo la command cleanup','Try a command-cleanup setting'),{choices:[['current',t('Tumia settings za sasa','Use current settings')],['on',t('Jaribu ikiwa imewashwa','Try enabled')],['off',t('Jaribu ikiwa imezimwa','Try disabled')]]});
@@ -46,13 +47,13 @@ export function careToolsClient(h,doctorCopy) {
     },async fields=>{
       const chatId=state.chatId;state.busy=true;output.replaceChildren(hint(t('Inajaribu…','Testing…')));
       try{
-        const input={text:fields.text.value,caption:fields.caption.value,forwarded:fields.forwarded.checked,sender:fields.sender.value,priorStrikes:Number(fields.priorStrikes.value),format:fields.format.value};
+        const input={text:fields.text.value,caption:fields.caption.value,forwarded:fields.forwarded.checked,sender:fields.sender.value,priorStrikes:Number(fields.priorStrikes.value),linkWarned:fields.linkWarned.checked,format:fields.format.value};
         if(fields.messagesInWindow.value)input.messagesInWindow=Number(fields.messagesInWindow.value);
         const proposed={};if(fields.commandMode.value!=='current')proposed.command_spam_enabled=fields.commandMode.value==='on';if(fields.exceptions.value.trim())proposed.command_spam_allowlist=fields.exceptions.value;
         if(Object.keys(proposed).length)input.proposedSettings=proposed;
         if(fields.extraLinks.value.trim())input.extraRules=fields.extraLinks.value.trim().split('\n').filter(Boolean).map(value=>({kind:'url',value:value.trim()}));
         const data=await request({view:'policy_test',chatId,input});if(chatId!==state.chatId)return;
-        const decisions={allow:t('Ujumbe unaruhusiwa','Message allowed'),exempt:t('Sender ameondolewa kwenye moderation','Sender is exempt'),paused:t('Moderation imesitishwa','Moderation is paused'),delete_only:t('Futa ujumbe pekee','Delete message only'),delete_and_ban:t('Futa ujumbe na toa ban','Delete message and ban'),delete_and_mute:t('Futa ujumbe na toa mute','Delete message and mute')};
+        const decisions={allow:t('Ujumbe unaruhusiwa','Message allowed'),exempt:t('Sender ameondolewa kwenye moderation','Sender is exempt'),paused:t('Moderation imesitishwa','Moderation is paused'),delete_only:t('Futa ujumbe pekee','Delete message only'),delete_and_warn:t('Futa ujumbe na toa onyo la link','Delete message and give a link warning'),delete_and_ban:t('Futa ujumbe na toa ban','Delete message and ban'),delete_and_mute:t('Futa ujumbe na toa mute','Delete message and mute')};
         const reasons={link:t('Link haijaruhusiwa','Unapproved link'),forward:t('Forwarded message','Forwarded message'),command_spam:t('Spam ya commands','Command spam'),command_filter_off:t('Command cleanup imezimwa','Command cleanup is off'),flood:t('Flood limit imezidiwa','Flood threshold exceeded'),moderation_paused:t('Moderation imesitishwa','Moderation paused'),admin:'Admin',anonymous_admin:'Anonymous admin',linked_channel:'Linked channel'};
         const body=el('div','card-body');add(body,el('h2','',decisions[data.decision]||data.decision),el('p','card-copy',(data.reasons||[]).map(reason=>reasons[reason]||reason).join(' · ')));
         if(data.durationSeconds!==null)body.append(el('p','item-copy',data.durationSeconds===0?t('Muda: permanent','Duration: permanent'):`${t('Muda','Duration')}: ${data.durationSeconds>=86400?`${data.durationSeconds/86400} ${t('siku','days')}`:`${data.durationSeconds/60} ${t('dakika','minutes')}`}`));

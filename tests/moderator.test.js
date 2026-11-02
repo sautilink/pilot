@@ -73,19 +73,17 @@ async function fixture(t,{fresh=false}={}) {
   const db = new TestD1();
   await applySchema(db);
   t.after(() => db.close());
-  // Existing ban-path regression tests model members who already received
-  // their introductory link warning. Dedicated fresh=true tests verify
-  // the new user journey, including the full four-step sequence.
-  if(!fresh) for(const chat of [GROUP,OTHER_GROUP]) {
-    await createStore(db).member(chat,USER_ID);
-    await db.prepare('UPDATE members SET last_incident=? WHERE chat_id=? AND user_id=?')
-      .bind('previous-link-warning',String(chat),String(USER_ID)).run();
-  }
   const api = new FakeTelegram();
   let now = START;
   let updateId = 1;
   let messageId = 1;
   const moderator = createModerator({ db, api, clock: () => now });
+  // Ban-path regressions require a durably delivered prior warning. Fresh
+  // journeys below and in link-warning.test.js start with no warning ledger.
+  if(!fresh) for (const chat of [GROUP, OTHER_GROUP]) {
+    await db.prepare('INSERT INTO member_link_warnings(chat_id,user_id,incident_id,warned_at,delivered_at) VALUES(?,?,?,?,?)')
+      .bind(String(chat), String(USER_ID), `prior-warning:${chat}:${USER_ID}`, START - 10, START - 10).run();
+  }
   return {
     db, api, moderator,
     now: () => now,
@@ -105,7 +103,7 @@ async function fixture(t,{fresh=false}={}) {
   };
 }
 
-test('first violation removes the message, bans for 24 hours, then announces it', async (t) => {
+test('first ban after a prior warning removes the message, bans for 24 hours, then announces it', async (t) => {
   const f = await fixture(t);
   await f.moderator.handle(f.message());
   const bans = f.api.callsOf('banChatMember');
@@ -326,8 +324,13 @@ test('an authorized admin can forgive strikes and pause/resume this group', asyn
   f.advance(1);
   await f.moderator.handle(f.message());
   const bans = f.api.callsOf('banChatMember');
-  assert.equal(bans.length, 2);
-  assert.equal(bans[1].params.until_date, f.now() + 86400);
+  assert.equal(bans.length, 1, 'forgive restores first-link warning eligibility');
+  assert.equal((await f.db.prepare('SELECT strikes FROM members WHERE chat_id=? AND user_id=?')
+    .bind(String(GROUP), String(USER_ID)).first()).strikes, 0);
+  f.advance(1);
+  await f.moderator.handle(f.message());
+  assert.equal(f.api.callsOf('banChatMember').length, 2);
+  assert.equal(f.api.callsOf('banChatMember')[1].params.until_date, f.now() + 86400);
 });
 
 test('failure to verify administrator status defers destructive actions', async (t) => {
@@ -691,7 +694,7 @@ test('new member first forbidden link is deleted, tagged and warned without incr
   assert.equal(f.api.callsOf('banChatMember').length,0);
   const notice=f.api.callsOf('sendMessage')[0].params;
   assert.equal(notice.chat_id,GROUP);
-  assert.match(notice.text,/ONYO LA KWANZA/);
+  assert.match(notice.text,/ONYO LA LINK/);
   assert.match(notice.text,/tg:\/\/user\?id=101/);
   assert.match(notice.text,/&lt;Juma &amp; A&gt;/);
   assert.match(notice.text,/saa 24/);
@@ -746,15 +749,16 @@ test('fresh user warning is at most once per message or album and history is gro
   assert.equal(f.api.callsOf('sendMessage').length,2);
 });
 
-test('first link warning does not shield forwards, including a forwarded prohibited link',async t=>{
+test('forward-only messages keep immediate bans while mixed prohibited links receive their first warning',async t=>{
   const a=await fixture(t,{fresh:true});
   await a.moderator.handle(a.message({text:'forwarded',forward_origin:{type:'hidden_user',date:START-1}}));
   assert.equal(a.api.callsOf('banChatMember').length,1);
   assert.equal(a.api.callsOf('sendMessage')[0].params.text.includes('ONYO LA KWANZA'),false);
   const b=await fixture(t,{fresh:true});
   await b.moderator.handle(b.message({forward_origin:{type:'hidden_user',date:START-1}}));
-  assert.equal(b.api.callsOf('banChatMember').length,1);
-  assert.equal((await createStore(b.db).member(GROUP,USER_ID)).strikes,1);
+  assert.equal(b.api.callsOf('banChatMember').length,0);
+  assert.equal((await createStore(b.db).member(GROUP,USER_ID)).strikes,0);
+  assert.ok((await createStore(b.db).linkWarning(GROUP,USER_ID)).delivered_at);
 });
 
 test('if Telegram cannot delete first link, neither warning nor ban is recorded',async t=>{
@@ -786,6 +790,11 @@ test('a lost warning response never spams the group or converts a replay to a ba
   assert.equal((await f.db.prepare('SELECT status FROM notification_delivery').first()).status,'unknown');
   f.advance(2);
   await f.moderator.handle(f.message());
+  assert.equal(f.api.callsOf('banChatMember').length,0,'an unknown warning delivery requires a fresh reminder');
+  assert.equal(f.api.callsOf('sendMessage').length,2);
+  assert.ok((await createStore(f.db).linkWarning(GROUP,USER_ID)).delivered_at);
+  f.advance(2);
+  await f.moderator.handle(f.message());
   assert.equal(f.api.callsOf('banChatMember').length,1);
 });
 
@@ -804,25 +813,35 @@ test('warning mentions gracefully degrade to plain text when Telegram rejects HT
   assert.equal(f.api.callsOf('banChatMember').length,0);
 });
 
-test('old confirmed strikes remain intact after rollout and cannot receive a free warning',async t=>{
+test('old confirmed strikes remain intact after rollout while their first new link receives a warning',async t=>{
   const f=await fixture(t,{fresh:true});
   const store=createStore(f.db);
   await store.member(GROUP,USER_ID);
   await store.run('UPDATE members SET strikes=1,active_until=0,episode_at=?,last_incident=? WHERE chat_id=? AND user_id=?',
     START-86400,'legacy-ban',String(GROUP),String(USER_ID));
   await f.moderator.handle(f.message());
+  assert.equal(f.api.callsOf('banChatMember').length,0);
+  assert.equal((await store.member(GROUP,USER_ID)).strikes,1);
+  assert.equal((await store.member(GROUP,USER_ID)).last_incident,'legacy-ban');
+  f.advance(2);
+  await f.moderator.handle(f.message());
   assert.equal(f.api.callsOf('banChatMember').length,1);
   assert.equal(f.api.callsOf('banChatMember')[0].params.until_date,f.now()+7*86400);
 });
 
 
-test('two distinct forbidden links in the same Telegram second still trigger warning then 24h ban',async t=>{
+test('two distinct forbidden links in the warning-delivery second are deleted before a later repeat gets 24h',async t=>{
   const f=await fixture(t,{fresh:true});
   const first=f.message();
   const second=f.message();
   assert.equal(first.message.date,second.message.date);
   await f.moderator.handle(first);
-  await f.moderator.handle(second);
+  assert.equal((await f.moderator.handle(second)).status,'before_warning');
+  assert.equal(f.api.callsOf('banChatMember').length,0);
+  assert.equal(f.api.callsOf('deleteMessage').length,2);
+  assert.equal((await createStore(f.db).member(GROUP,USER_ID)).strikes,0);
+  f.advance(2);
+  await f.moderator.handle(f.message());
   assert.equal(f.api.callsOf('banChatMember').length,1);
   assert.equal(f.api.callsOf('banChatMember')[0].params.until_date,f.now()+86400);
   assert.equal((await createStore(f.db).member(GROUP,USER_ID)).strikes,1);
@@ -841,7 +860,7 @@ test('fresh first warning with English group language is tagged and translated',
   await createStore(f.db).setLanguage('group',GROUP,'en',f.now());
   await f.moderator.handle(f.message());
   const text=f.api.callsOf('sendMessage')[0].params.text;
-  assert.match(text,/FIRST LINK WARNING/);
+  assert.match(text,/LINK WARNING/);
   assert.match(text,/tg:\/\/user\?id=101/);
   assert.match(text,/24 hours/);
   assert.doesNotMatch(text,/ONYO LA KWANZA|Ukirudia/);

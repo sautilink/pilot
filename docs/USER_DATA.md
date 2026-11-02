@@ -41,6 +41,7 @@ Possessing a panel link does not grant access.
 | Integration credentials | Expire within 90 days or when revoked; expired records are eligible for cleanup 30 days after expiry |
 | Owner broadcast content and delivery outcomes | Eligible for cleanup after 30 days |
 | Strike totals | Remain until a group admin resets them |
+| First-link warning marker (group/user IDs, incident ID, warning time and confirmed delivery time) | Remains until a group admin resets it with `/forgive`; 30-day incident cleanup does not reset it |
 | Group settings, approved answers, community pages and language preferences | Retained for continued service until changed or removed |
 
 Cleanup is periodic, so deletion of eligible records may take more than one pass.

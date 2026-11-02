@@ -26,14 +26,35 @@ hosting account or a copy of this repository.
 
 ## Moderation rules
 
-For an ordinary member, a prohibited link or forwarded message is removed and
-the confirmed offense follows this group-specific sequence:
+For an ordinary member, the first prohibited link in each group is removed and
+Pilot tags the member with a warning: another prohibited link will trigger a ban.
+This warning adds no strike. Bans for later prohibited links begin only after
+Telegram confirms warning delivery. If delivery fails or is unconfirmed, later
+distinct link messages are deleted with another warning reminder and no strike.
+After confirmed delivery, later prohibited links use the existing strike history
+and confirmed ban sequence:
 
 | Offense | Ban |
 | --- | --- |
-| First | 24 hours |
-| Second | 7 days |
-| Third and later | Permanent |
+| First ban strike | 24 hours |
+| Second ban strike | 7 days |
+| Third and later ban strike | Permanent |
+
+Forwarded messages without a prohibited link still start directly at the ban
+sequence; an approved link does not exempt a forward. A message containing both
+a prohibited link and a forward receives the link warning if it is still due.
+The warning is separate for each member and group and does not expire when the
+30-day incident history is cleaned up.
+
+Existing strikes are retained. Members with prior strikes and no recorded link
+warning receive one warning on their next eligible prohibited link after
+rollout, then continue at their existing next ban level. Warnings and confirmed
+delivery records from the earlier warning-first release are adopted into the
+durable warning history. Missing delivery proof grants a warning reminder,
+not a ban. Existing active or permanent bans are not lifted.
+
+See the [policy and rollout guide](docs/MODERATION_POLICY.md) for compatibility,
+recovery and release checks.
 
 Group owners, admins, anonymous admins and the group's actual linked-channel
 posts are exempt. A member manually forwarding a channel post is still subject
@@ -89,8 +110,9 @@ before enabling it.
 - `/doctor` checks the group’s permissions and readiness.
 - `/policytest` tries sample messages against group rules without deleting messages or applying penalties.
 - `/pause` and `/resume` control new-message moderation.
-- `/unban` removes a ban while retaining the strike history.
-- `/forgive` resets this group's strike history while retaining an existing ban.
+- `/strikes USER_ID` shows this group's ban strikes and link-warning state.
+- `/unban` removes a ban while retaining strikes and the link warning.
+- `/forgive` resets this group's strikes and link warning while retaining an existing Telegram ban.
 - `/alerts` and `/report` manage your private group notifications.
 
 Global Pilot product announcements are reserved for the authorized Pilot owner.

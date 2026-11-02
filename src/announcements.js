@@ -20,6 +20,20 @@ function expiry(until,language) {
 export function formatAnnouncement(row,message,success=true,language='sw',settings={}) {
   const en=language==='en';
   const name=displayName(message,language);
+  if(row.status==='warned') {
+    const title=en ? '⚠️ LINK WARNING' : '⚠️ ONYO LA LINK';
+    const reason=en ? 'The message containing a prohibited link has been removed.' : 'Ujumbe wenye link isiyoruhusiwa umeondolewa.';
+    const warning=en
+      ? 'This is your one link warning in this group. If you post a prohibited link again, you will be banned. Ban levels: 24 hours → 7 days → permanent. Existing strikes still apply.'
+      : 'Hili ni onyo lako moja la link kwenye group hili. Ukituma tena link isiyoruhusiwa, utafungiwa. Viwango vya ban: saa 24 → siku 7 → kudumu. Strikes za awali zinaendelea kuhesabiwa.';
+    const noBan=en ? 'No ban or strike has been added for this warning.' : 'Onyo hili halijaongeza ban wala strike.';
+    const plain=[title,'',name,'',reason,warning,noBan,'',FOOTER_PLAIN].join('\n');
+    const rich=[`<b>${title}</b>`,'',`<a href="tg://user?id=${Number(row.user_id)}">${escapeHtml(name)}</a>`,'',reason,warning,noBan,'',FOOTER_RICH].join('\n');
+    // Entity offsets use UTF-16, as do JavaScript string indices. Preserve the
+    // actual tag if Telegram rejects HTML and the sender has no username.
+    const user={id:Number(row.user_id),is_bot:!!message.from?.is_bot,first_name:message.from?.first_name || name};
+    return {rich,plain,plainEntities:[{type:'text_mention',offset:title.length+2,length:name.length,user}]};
+  }
   const reasons=JSON.parse(row.reasons).map(reason=>reason==='forward' ? (en ? 'Forwarded messages are not allowed.' : 'Ujumbe wa forward hauruhusiwi.') : (en ? 'The posted link is not allowed.' : 'Link iliyotumwa hairuhusiwi.'));
   const duration=row.strike===1 ? (en ? '24 hours' : 'Saa 24') : row.strike===2 ? (en ? '7 days' : 'Siku 7') : (en ? 'Permanent' : 'Kudumu');
   const identity=row.user_id ? `ID: ${Number(row.user_id)}` : (en ? 'Posted on behalf of a channel' : 'Ujumbe umetumwa kwa niaba ya channel');
@@ -51,21 +65,9 @@ export function formatAnnouncement(row,message,success=true,language='sw',settin
   return {rich:`${rich}\n\n${FOOTER_RICH}`,plain:`${plain}\n\n${FOOTER_PLAIN}`};
 }
 
-// An educational, group-visible warning is not a strike. Mention the user
-// while they are still a member; a plain fallback is used if Telegram rejects
-// HTML/mentions. Never show a ban before Telegram has actually applied one.
+// Retain the formatter entry point used by the earlier warning release.
 export function formatLinkWarning(row,message,language='sw') {
-  const en=language==='en',name=displayName(message,language);
-  const identity=Number(row.user_id);
-  const title=en?'⚠️ FIRST LINK WARNING':'⚠️ ONYO LA KWANZA LA LINK';
-  const advice=en
-    ? 'Your unapproved link was removed. This is a warning, not a ban. If you share another prohibited link, you will be banned for 24 hours. Further violations lead to 7 days, then a permanent ban.'
-    : 'Link yako isiyoruhusiwa imefutwa. Hili ni onyo, si ban. Ukirudia kutuma link isiyoruhusiwa, utafungiwa saa 24. Ukirudia tena, siku 7, kisha ban ya kudumu.';
-  const tagged=`<a href="tg://user?id=${identity}">${escapeHtml(name)}</a>`;
-  return {
-    rich:`<b>${title}</b>\n\n👤 ${tagged} (<code>${identity}</code>)\n\n${escapeHtml(advice)}\n\n${FOOTER_RICH}`,
-    plain:`${title}\n\n${name} (ID: ${identity})\n\n${advice}\n\n${FOOTER_PLAIN}`,
-  };
+  return formatAnnouncement({...row,status:'warned'},message,false,language);
 }
 
 export function noticeErrorKind(error) {
@@ -89,9 +91,7 @@ export function createAnnouncer({store,api,clock,controlStore}) {
     if(record.retry_at>clock()) return true;
     const language=Object.hasOwn(context,'groupLanguage') ? context.groupLanguage || 'sw' : await store.getLanguage('group',message.chat.id);
     const settings=context.groupSettings ?? (controlStore ? await controlStore.settings(message.chat.id) : {});
-    const {rich,plain}=row.strike===0 && row.status==='warned'
-      ? formatLinkWarning(row,message,language)
-      : formatAnnouncement(row,message,success,language,settings);
+    const {rich,plain,plainEntities}=formatAnnouncement(row,message,success,language,settings);
     let usePlain=false;
     let thread=message.is_topic_message && Number.isSafeInteger(message.message_thread_id) ? message.message_thread_id : null;
     for(let attempt=0;attempt<3;attempt++) {
@@ -99,10 +99,11 @@ export function createAnnouncer({store,api,clock,controlStore}) {
       try {
         const result=await api.call('sendMessage',{
           chat_id:message.chat.id,text:usePlain ? plain : rich,
+          ...(usePlain && plainEntities ? {entities:plainEntities} : {}),
           ...(!usePlain ? {parse_mode:'HTML',reply_markup:{inline_keyboard:[[{text:language==='en' ? '📖 Pilot rules' : '📖 Sheria za Pilot',url:'https://t.me/sautilinkpilotbot?start=rules'}]]}} : {}),
           link_preview_options:{is_disabled:true},...(thread ? {message_thread_id:thread} : {})
         });
-        if(!Number.isSafeInteger(result?.message_id)) {
+        if(!Number.isSafeInteger(result?.message_id) || result.message_id<=0) {
           await store.noticeState(row.id,'unknown',clock(),{errorKind:'delivery_unknown'});
           return false;
         }

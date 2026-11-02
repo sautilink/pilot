@@ -21,7 +21,7 @@ const object = value => value && typeof value === 'object' && !Array.isArray(val
 const fail = (code, status = 400) => { throw new ControlError(code, status); };
 const ACTIONS = new Set(['configure', 'whitelist_add', 'whitelist_remove', 'pause', 'resume', 'subscribe', 'appeal_create', 'appeal_resolve', 'case_unban', 'case_forgive']);
 const ADMIN_VIEWS = new Set(['overview', 'incident', 'incidents', 'appeals', 'audit', 'stats', 'settings', 'whitelist']);
-const NOTICE_ERRORS = new Set(['send_permission', 'topic_unavailable', 'message_rejected', 'delivery_unknown', 'telegram_rejected', 'rate_limit', 'admin_override', 'membership_changed']);
+const NOTICE_ERRORS = new Set(['send_permission', 'topic_unavailable', 'message_rejected', 'delivery_unknown', 'telegram_rejected', 'rate_limit', 'admin_override', 'membership_changed', 'warning_superseded']);
 const ERROR_STATUS = { forbidden: 403, not_found: 404, case_stale: 409, case_already_corrected: 409, appeal_resolved: 409, appeal_rate_limited: 429, whitelist_limit: 409, request_conflict: 409, operation_pending: 409, operation_unknown: 409, telegram_rejected: 502, membership_unavailable: 503, internal_error: 500 };
 
 function actorId(actor) {

@@ -38,12 +38,6 @@ async function fixture(t,settings={}) {
   };
 }
 
-async function warnedMember(f,chat=GROUP) {
-  await f.store.member(chat,USER);
-  await f.store.run('UPDATE members SET last_incident=? WHERE chat_id=? AND user_id=?',
-    'previous-link-warning',String(chat),String(USER));
-}
-
 test('an admin stays exempt when the independent bot role lookup fails',async t=>{
   const f=await fixture(t);
   f.hooks.set('getChatMember',params=>{
@@ -98,23 +92,26 @@ test('flood mute respects human restrictions and admin, anonymous, and linked-ch
   assert.equal(f.of('deleteMessage').length,2);assert.equal(f.of('banChatMember').length,0);
 });
 
-test('a primary link violation retains the original escalation even when flood control is enabled',async t=>{
+test('a primary link violation warns before progressive bans even when flood control is enabled',async t=>{
   const f=await fixture(t,{flood_enabled:true,flood_limit:3,flood_window:10,flood_action:'mute'});
-  await warnedMember(f);
   for(let i=0;i<3;i++) await f.moderator.handle(f.message());
   await f.moderator.handle(f.message({text:'https://forbidden.example'}));
-  assert.equal(f.of('banChatMember').length,1);assert.equal(f.of('banChatMember')[0].p.until_date,START+86400);
+  assert.equal(f.of('banChatMember').length,0);assert.equal((await f.store.member(GROUP,USER)).strikes,0);
+  assert.ok(await f.store.linkWarning(GROUP,USER));
+  f.advance(1);await f.moderator.handle(f.message({text:'https://forbidden.example'}));
+  assert.equal(f.of('banChatMember').length,1);assert.equal(f.of('banChatMember')[0].p.until_date,f.clock()+86400);
   assert.equal(f.of('restrictChatMember').length,0);assert.equal((await f.store.member(GROUP,USER)).strikes,1);
 });
 
 test('per-group whitelist is applied by the real moderator and does not allow forwarded messages',async t=>{
   const f=await fixture(t);
-  await warnedMember(f); await warnedMember(f,OTHER);
   await f.db.prepare('INSERT INTO pilot_whitelist_rules VALUES(?,?,?,?,?,?)').bind('rule-one',String(GROUP),'domain','example.com',String(ADMIN),START).run();
   await f.moderator.handle(f.message({text:'https://example.com/path'}));assert.equal(f.of('banChatMember').length,0);
   await f.moderator.handle(f.message({text:'https://example.com/path',forward_origin:{type:'hidden_user',date:START-1,sender_user_name:'Person'}}));
   assert.equal(f.of('banChatMember').length,1);
-  await f.moderator.handle(f.message({chat:{id:OTHER,type:'supergroup'},text:'https://example.com/path'}));assert.equal(f.of('banChatMember').length,2);
+  await f.moderator.handle(f.message({chat:{id:OTHER,type:'supergroup'},text:'https://example.com/path'}));assert.equal(f.of('banChatMember').length,1);
+  assert.ok(await f.store.linkWarning(OTHER,USER),'another group has its own first-link warning');
+  assert.equal(await f.store.linkWarning(GROUP,USER),null,'allowed links and forward-only bans do not consume a link warning');
 });
 
 test('welcome is deduplicated across service and membership events and safely escapes custom text',async t=>{
@@ -158,7 +155,9 @@ test('an uncertain join approval is never repeated and a human ban always wins',
 });
 
 test('a cancelled corrected incident cannot be resurrected by confirmation recovery',async t=>{
-  const f=await fixture(t);await f.moderator.handle(f.message({text:'https://forbidden.example'}));
+  const f=await fixture(t);
+  await f.store.run('INSERT INTO member_link_warnings(chat_id,user_id,incident_id,warned_at,delivered_at) VALUES(?,?,?,?,?)',String(GROUP),String(USER),'prior-warning',START-1,START-1);
+  await f.moderator.handle(f.message({text:'https://forbidden.example'}));
   const row=await f.db.prepare('SELECT * FROM incidents').first();
   await f.store.status(row.id,'cancelled');await f.store.run('UPDATE members SET strikes=0,override_at=?',START);
   await f.store.confirm(row,START+1);
@@ -200,8 +199,9 @@ test('a manual unmute clears the old flood episode and queued messages cannot re
 });
 
 test('malformed success payloads never confirm a ban or an undelivered deletion',async t=>{
-  const f=await fixture(t);
-  await warnedMember(f);f.hooks.set('deleteMessage',()=>false);
+  const f=await fixture(t);f.hooks.set('deleteMessage',()=>false);
+  // Exercise malformed ban results for a member who already received a warning.
+  await f.store.run('INSERT INTO member_link_warnings(chat_id,user_id,incident_id,warned_at,delivered_at) VALUES(?,?,?,?,?)',String(GROUP),String(USER),'prior-warning',START-1,START-1);
   await assert.rejects(f.moderator.handle(f.message({text:'https://forbidden.example'})));
   assert.equal(f.of('banChatMember').length,0);assert.equal(f.of('sendMessage').length,0);
   f.hooks.delete('deleteMessage');f.hooks.set('banChatMember',()=>false);
@@ -466,11 +466,9 @@ test('a clean edit delivered before its original webhook protects current text w
 
 test('long-code exceptions cannot exempt a forwarded code or concealed prohibited link',async t=>{
   const f=await fixture(t,{command_spam_allowlist:LONG_COMMAND,flood_enabled:true,flood_limit:3,flood_window:10,flood_action:'mute'});
-  await warnedMember(f);
   await f.moderator.handle(f.message({text:LONG_COMMAND,forward_origin:{type:'hidden_user',date:START-1,sender_user_name:'Person'}}));
   assert.equal(f.of('banChatMember').length,1);assert.equal((await f.store.member(GROUP,USER)).strikes,1);
   await f.moderator.handle(f.message({text:LONG_COMMAND,from:{id:USER+5},entities:[{type:'text_link',offset:0,length:LONG_COMMAND.length,url:'https://forbidden.example'}]}));
   assert.equal(f.of('banChatMember').length,1);assert.equal(f.of('restrictChatMember').length,0);
-  assert.equal((await f.store.member(GROUP,USER+5)).strikes,0);
-  assert.equal((await f.db.prepare("SELECT COUNT(*) AS n FROM incidents WHERE strike=0 AND status='warned'").first()).n,1);
+  assert.ok(await f.store.linkWarning(GROUP,USER+5),'the concealed prohibited link still consumes the new member\'s warning');
 });

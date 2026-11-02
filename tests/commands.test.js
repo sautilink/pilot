@@ -145,7 +145,8 @@ test('group public commands are brief private pointers, and rules contain no adm
     assert.match(reply.reply_markup.inline_keyboard[0][0].url, /^https:\/\/t\.me\/sautilinkpilotbot\?start=home$/);
   }
   await f.command(groupMessage('/rules', USER));
-  assert.match(sent(f).at(-1).params.text, /Link ya kwanza isiyoruhusiwa/);
+  assert.match(sent(f).at(-1).params.text, /Link ya kwanza.*onyo/);
+  assert.match(sent(f).at(-1).params.text, /saa 24 → siku 7 → ban ya kudumu/);
   assert.doesNotMatch(sent(f).at(-1).params.text, sensitive);
   assert.equal(f.api.callsOf('getChatMember').length, 0);
 });
@@ -338,6 +339,25 @@ test('forgive stays scoped to its group, while pause and resume atomically mark 
   assert.equal((await f.store.group(GROUP)).activated_at, NOW);
   assert.ok(await f.store.seen(83));
   assert.ok(sent(f).every(call => call.params.chat_id === ADMIN));
+});
+
+test('strikes privately distinguishes due, unconfirmed and delivered first-link warnings', async t => {
+  const f = await fixture(t);
+  await f.store.setLanguage('user', ADMIN, 'en', NOW);
+  await f.store.member(GROUP, TARGET);
+  await f.store.run('UPDATE members SET strikes=2 WHERE chat_id=? AND user_id=?', String(GROUP), String(TARGET));
+  await f.command(groupMessage(`/strikes ${TARGET}`));
+  assert.equal(sent(f).at(-1).params.chat_id, ADMIN);
+  assert.match(sent(f).at(-1).params.text, /2 of 3 ban strikes/);
+  assert.match(sent(f).at(-1).params.text, /Link warning: still due/);
+  await f.store.run('INSERT INTO member_link_warnings(chat_id,user_id,incident_id,warned_at) VALUES(?,?,?,?)', String(GROUP), String(TARGET), 'warning-case', NOW);
+  await f.store.setAdminContext(ADMIN, GROUP, NOW);
+  await f.command(privateMessage(`/strikes ${TARGET}`, ADMIN));
+  assert.match(sent(f).at(-1).params.text, /2 of 3 ban strikes/);
+  assert.match(sent(f).at(-1).params.text, /Link warning: recorded, delivery unconfirmed/);
+  await f.store.run('UPDATE member_link_warnings SET delivered_at=? WHERE chat_id=? AND user_id=?', NOW, String(GROUP), String(TARGET));
+  await f.command(privateMessage(`/strikes ${TARGET}`, ADMIN));
+  assert.match(sent(f).at(-1).params.text, /Link warning: delivery confirmed/);
 });
 
 test('private admin panel stays read-only even when the selected admin requests group mutations', async t => {

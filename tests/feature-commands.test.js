@@ -102,6 +102,21 @@ test('case history always queries the actual private sender and never accepts a 
   assert.equal(f.queries.length, 1);
 });
 
+test('a first-link warning is shown as no ban and no strike in private member and admin case summaries', async t => {
+  const f = await fixture(t);
+  const warning = incident({ id: 'warning-1', status: 'warned', strike: 0, until_date: 0 });
+  f.state.ownCases = [warning];
+  f.state.overview.incidents = [warning];
+  await f.command(privateMessage('/mystatus'));
+  assert.match(f.replies().at(-1).params.text, /Link warning recorded.*No ban strike/);
+  assert.match(f.replies().at(-1).params.text, /Link warning · no ban/);
+  assert.doesNotMatch(f.replies().at(-1).params.text, /Permanent|Until:|Strike: 0/);
+  await f.store.setAdminContext(ADMIN, GROUP, NOW);
+  await f.command(privateMessage('/history', ADMIN));
+  assert.match(f.replies().at(-1).params.text, /Link warning · no ban/);
+  assert.doesNotMatch(f.replies().at(-1).params.text, /Permanent/);
+});
+
 test('appeals derive their group from the caller’s own case and dispatch a stable operation ID', async t => {
   const f = await fixture(t);
   const message = privateMessage('/appeal case-1 Please review this link.');

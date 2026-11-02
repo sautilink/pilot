@@ -109,13 +109,13 @@ test('policy preview uses the selected group and current expiry without persisti
   const snapshot = async () => Promise.all(['pilot_group_settings', 'pilot_whitelist_rules', 'pilot_temporary_links', 'pilot_config_history', 'members', 'incidents', 'pilot_tool_operations'].map(table => f.db.prepare(`SELECT * FROM ${table}`).all()));
   const before = await snapshot();
   assert.equal((await f.query('policy_test', { text: url })).decision, 'allow');
-  assert.equal((await f.query('policy_test', { text: url }, OTHER)).decision, 'delete_and_ban');
+  assert.equal((await f.query('policy_test', { text: url }, OTHER)).decision, 'delete_and_warn');
   assert.equal((await f.query('policy_test', { text: 'https://temporary.example/test' })).decision, 'allow');
   f.setNow(NOW + 31);
-  assert.equal((await f.query('policy_test', { text: 'https://temporary.example/test' })).decision, 'delete_and_ban');
+  assert.equal((await f.query('policy_test', { text: 'https://temporary.example/test' })).decision, 'delete_and_warn');
   const proposed = await f.query('policy_test', { text: 'private_sample_952 https://proposed.example/path', extraRules: [{ kind: 'url', value: 'https://proposed.example/path' }] });
   assert.equal(proposed.decision, 'allow'); assert.equal(proposed.usesProposedSettings, true);
-  assert.equal((await f.query('policy_test', { text: 'https://proposed.example/path' })).decision, 'delete_and_ban');
+  assert.equal((await f.query('policy_test', { text: 'https://proposed.example/path' })).decision, 'delete_and_warn');
   assert.deepEqual(await snapshot(), before);
   assert.ok(f.calls.every(call => call.method === 'getChatMember'));
 });
@@ -124,9 +124,14 @@ test('policy preview matches saturated strike tiers and delete-only command clea
   const settings = { ...CONTROL_DEFAULTS, flood_enabled: true, flood_limit: 2, flood_action: 'mute' };
   const simulate = input => simulatePolicy({ input, settings, rules: [] });
   for (const [priorStrikes, strike, durationSeconds] of [[0, 1, 86400], [1, 2, 604800], [2, 3, 0], [3, 3, 0]]) {
-    const result = simulate({ text: 'https://blocked.example/', priorStrikes });
+    const first = simulate({ text: 'https://blocked.example/', priorStrikes });
+    assert.equal(first.decision, 'delete_and_warn'); assert.equal(first.strike, null); assert.equal(first.durationSeconds, null);
+    const result = simulate({ text: 'https://blocked.example/', priorStrikes, linkWarned: true });
     assert.equal(result.decision, 'delete_and_ban'); assert.equal(result.strike, strike); assert.equal(result.durationSeconds, durationSeconds);
   }
+  assert.equal(simulate({ text: 'ordinary forward', forwarded: true }).decision, 'delete_and_ban');
+  assert.equal(simulate({ text: 'https://blocked.example/', forwarded: true }).decision, 'delete_and_warn');
+  assert.throws(() => simulate({ text: 'https://blocked.example/', linkWarned: 'yes' }), error => error.code === 'invalid_input');
   for (const sender of ['admin', 'anonymous_admin', 'linked_channel']) assert.equal(simulate({ text: 'https://blocked.example/', forwarded: true, sender }).decision, 'exempt');
   const text = `/${'a'.repeat(40)}`;
   assert.equal(simulate({ text, messagesInWindow: 10 }).decision, 'delete_only');

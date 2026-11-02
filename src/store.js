@@ -6,6 +6,36 @@ import {ensureSchemaFamily, applyCompleteSchema} from './schema-ready.js';
 
 // D1 is the source of truth; a Durable Object serializes each chat's actions.
 // Moderated message bodies, captions and Telegram tokens are never persisted.
+// This independent ledger deliberately outlives incident retention. Existing
+// strikes are ban history, not evidence that a member received the new warning.
+const adoptLinkWarningsSql = scoped => `
+INSERT INTO member_link_warnings(chat_id,user_id,incident_id,warned_at,delivered_at)
+SELECT i.chat_id,i.user_id,i.id,MAX(i.created_at,i.event_at),
+  CASE WHEN n.status='sent' AND typeof(n.telegram_message_id)='integer'
+    AND n.telegram_message_id BETWEEN 1 AND 9007199254740991 AND n.updated_at>0
+    THEN MAX(i.created_at,i.event_at,n.updated_at) ELSE 0 END AS delivery_proof
+FROM incidents i JOIN members m ON m.chat_id=i.chat_id AND m.user_id=i.user_id
+LEFT JOIN notification_delivery n ON n.incident_id=i.id
+WHERE i.status='warned' AND i.deleted=1 AND i.strike=0
+  AND i.user_id GLOB '[1-9]*' AND i.user_id NOT GLOB '*[^0-9]*'
+  AND CAST(i.user_id AS INTEGER)<=9007199254740991 AND m.override_at<i.event_at
+  AND EXISTS(SELECT 1 FROM json_each(CASE WHEN json_valid(i.reasons) THEN i.reasons ELSE '[]' END) r WHERE r.value='link')
+  ${scoped ? 'AND i.chat_id=? AND i.user_id=?' : ''}
+ORDER BY delivery_proof DESC,i.created_at DESC,i.id DESC
+ON CONFLICT(chat_id,user_id) DO UPDATE SET incident_id=excluded.incident_id,
+  warned_at=excluded.warned_at,delivered_at=excluded.delivered_at
+WHERE member_link_warnings.delivered_at=0 AND excluded.delivered_at>0
+  AND member_link_warnings.incident_id=excluded.incident_id;
+`;
+export const LINK_WARNING_ADOPTION_SQL = adoptLinkWarningsSql(false);
+export const LINK_WARNING_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS member_link_warnings (
+  chat_id TEXT NOT NULL, user_id TEXT NOT NULL,
+  incident_id TEXT NOT NULL, warned_at INTEGER NOT NULL,
+  delivered_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(chat_id,user_id)
+);
+` + LINK_WARNING_ADOPTION_SQL;
 export const EXPERIENCE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS notification_delivery (
   incident_id TEXT PRIMARY KEY,
@@ -47,7 +77,7 @@ CREATE TABLE IF NOT EXISTS processed_updates (
   update_id INTEGER PRIMARY KEY, processed_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS processed_age ON processed_updates(processed_at);
-` + EXPERIENCE_SCHEMA_SQL + CONTROL_SCHEMA_SQL + GUARDRAIL_SCHEMA_SQL + OWNER_SCHEMA_SQL + BROADCAST_SCHEMA_SQL;
+` + EXPERIENCE_SCHEMA_SQL + LINK_WARNING_SCHEMA_SQL + CONTROL_SCHEMA_SQL + GUARDRAIL_SCHEMA_SQL + OWNER_SCHEMA_SQL + BROADCAST_SCHEMA_SQL;
 
 export const applySchema = db => applyCompleteSchema(db, SCHEMA_SQL);
 
@@ -55,8 +85,21 @@ export function createStore(db) {
   const run = (sql, ...args) => db.prepare(sql).bind(...args).run();
   const first = (sql, ...args) => db.prepare(sql).bind(...args).first();
   const ensureExtras = () => ensureSchemaFamily(db, 'experience', EXPERIENCE_SCHEMA_SQL);
+  const ensureLinkWarnings = async () => {
+    await ensureExtras();
+    return ensureSchemaFamily(db, 'linkwarnings', LINK_WARNING_SCHEMA_SQL);
+  };
+  const adoptMemberWarnings = (chat,user) => db.prepare(adoptLinkWarningsSql(true)).bind(String(chat),String(user));
   return {
-    run, first, ensureExtras,
+    run, first, ensureExtras, ensureLinkWarnings,
+    async linkWarning(chat,user) {
+      await ensureLinkWarnings();
+      const results=await db.batch([
+        adoptMemberWarnings(chat,user),
+        db.prepare('SELECT * FROM member_link_warnings WHERE chat_id=? AND user_id=?').bind(String(chat),String(user)),
+      ]);
+      return results[1].results[0] || null;
+    },
     async setting(key) { return (await first('SELECT value FROM settings WHERE key = ?', key))?.value ?? null; },
     async settings(values) {
       await db.batch(Object.entries(values).map(([k,v]) => db.prepare(
@@ -84,6 +127,7 @@ export function createStore(db) {
       return results[1].results[0];
     },
     async moderationState(chat,user,incidentId) {
+      await ensureLinkWarnings();
       const chatId=String(chat), target=user == null ? null : String(user);
       const statements=[
         db.prepare('INSERT OR IGNORE INTO groups(chat_id) VALUES(?)').bind(chatId),
@@ -92,13 +136,19 @@ export function createStore(db) {
       ];
       // A role-exempt sender should not acquire a member record merely because
       // their message contains a link. Read defaults until an incident is planned.
-      if(target!==null) statements.push(db.prepare('SELECT * FROM members WHERE chat_id=? AND user_id=?').bind(chatId,target));
+      if(target!==null) statements.push(
+        db.prepare('SELECT * FROM members WHERE chat_id=? AND user_id=?').bind(chatId,target),
+        // A previous deployment can finish a warning after the operator ran the
+        // migration. Reconcile durable proof in this same snapshot transaction.
+        adoptMemberWarnings(chatId,target),
+        db.prepare('SELECT * FROM member_link_warnings WHERE chat_id=? AND user_id=?').bind(chatId,target),
+      );
       statements.push(db.prepare('SELECT * FROM incidents WHERE id=?').bind(incidentId));
       const results=await db.batch(statements);
       const member=target===null ? null : results[3].results[0] || {
         chat_id:chatId,user_id:target,strikes:0,last_incident:null,active_until:0,episode_at:0,override_at:0,
       };
-      return {group:results[1].results[0],activation:Number(results[2].results[0]?.value || 0),member,incident:results.at(-1).results[0] || null};
+      return {group:results[1].results[0],activation:Number(results[2].results[0]?.value || 0),member,linkWarning:target===null ? null : results[5].results[0] || null,incident:results.at(-1).results[0] || null};
     },
     incident(id) { return first('SELECT * FROM incidents WHERE id=?',id); },
     async plan(row) {
@@ -114,23 +164,19 @@ export function createStore(db) {
     },
     status(id,status) { return run('UPDATE incidents SET status=? WHERE id=?',status,id); },
     async confirmWarning(row,now) {
-      // A link-only warning is a durable incident with strike=0. It must not
-      // increment strikes or start a Telegram ban. The coordinator serializes
-      // this with subsequent messages; the WHERE guard protects older updates.
-      const result=await db.batch([
-        db.prepare(`UPDATE members SET last_incident=?,episode_at=?,active_until=0
-          WHERE chat_id=? AND user_id=? AND strikes=0 AND last_incident IS NULL
-            AND override_at<?`)
-          .bind(row.id,row.event_at,String(row.chat_id),String(row.user_id),row.event_at),
-        db.prepare(`UPDATE incidents SET status='warned' WHERE id=? AND strike=0
-          AND status='planned' AND EXISTS (
-            SELECT 1 FROM members WHERE chat_id=? AND user_id=?
-              AND last_incident=? AND override_at<?)`)
-          .bind(row.id,String(row.chat_id),String(row.user_id),row.id,row.event_at)
+      await Promise.all([ensureLinkWarnings(),ensureExtras()]);
+      // Delete confirmation, durable eligibility and the incident outcome commit
+      // together. A failed transaction leaves a retryable, unconsumed warning.
+      const results=await db.batch([
+        db.prepare("INSERT INTO member_link_warnings(chat_id,user_id,incident_id,warned_at) SELECT chat_id,user_id,id,? FROM incidents WHERE id=? AND user_id IS NOT NULL AND strike=0 AND status='planned' AND EXISTS(SELECT 1 FROM members m WHERE m.chat_id=incidents.chat_id AND m.user_id=incidents.user_id AND m.override_at<incidents.event_at) ON CONFLICT(chat_id,user_id) DO UPDATE SET incident_id=excluded.incident_id,warned_at=excluded.warned_at WHERE member_link_warnings.delivered_at=0").bind(now,row.id),
+        db.prepare("UPDATE notification_delivery SET status='cancelled',error_kind='warning_superseded',updated_at=? WHERE status='pending' AND incident_id IN (SELECT i.id FROM incidents i JOIN member_link_warnings w ON w.chat_id=i.chat_id AND w.user_id=i.user_id WHERE w.incident_id=? AND i.id!=? AND i.strike=0 AND i.status='warned')").bind(now,row.id,row.id),
+        db.prepare("UPDATE incidents SET status='warned',deleted=1 WHERE id=? AND strike=0 AND status='planned' AND EXISTS(SELECT 1 FROM member_link_warnings w WHERE w.chat_id=incidents.chat_id AND w.user_id=incidents.user_id) AND EXISTS(SELECT 1 FROM members m WHERE m.chat_id=incidents.chat_id AND m.user_id=incidents.user_id AND m.override_at<incidents.event_at)").bind(row.id),
+        db.prepare('SELECT i.*,EXISTS(SELECT 1 FROM member_link_warnings w WHERE w.incident_id=i.id) AS warning_current FROM incidents i WHERE i.id=?').bind(row.id),
       ]);
-      return (result.at(-1)?.meta?.changes ?? result.at(-1)?.changes ?? 0)>0;
+      return results.at(-1).results[0] || null;
     },
     async confirm(row,now) {
+      if(!Number.isSafeInteger(row.strike) || row.strike<1 || row.strike>3) throw new RangeError('Only a positive ban strike can be confirmed');
       const statements=[];
       if(/^[1-9]\d*$/.test(String(row.user_id)) && Number.isSafeInteger(Number(row.user_id))) {
         // Recovery may find an existing incident after a missing member row was
@@ -146,6 +192,7 @@ export function createStore(db) {
     },
     async override(chat,user,at,reset=false,updateId=null) {
       await ensureExtras();
+      if(reset) await ensureLinkWarnings();
       const changes=[
         db.prepare('INSERT OR IGNORE INTO members(chat_id,user_id) VALUES(?,?)').bind(String(chat),String(user)),
         db.prepare(`UPDATE members SET ${reset ? 'strikes=0,' : ''} active_until=CASE WHEN episode_at<=? THEN 0 ELSE active_until END,override_at=MAX(override_at,?) WHERE chat_id=? AND user_id=?`)
@@ -155,6 +202,9 @@ export function createStore(db) {
         db.prepare("UPDATE notification_delivery SET status='cancelled',error_kind='admin_override',updated_at=? WHERE status='pending' AND incident_id IN (SELECT id FROM incidents WHERE chat_id=? AND user_id=? AND event_at<=?)")
           .bind(at,String(chat),String(user),at)
       ];
+      // Forgiveness is the explicit fresh start. Unban and ordinary human
+      // overrides preserve both the prior strike level and link warning.
+      if(reset) changes.push(db.prepare('DELETE FROM member_link_warnings WHERE chat_id=? AND user_id=? AND warned_at<=?').bind(String(chat),String(user),at));
       if(updateId!==null) changes.push(db.prepare('INSERT OR IGNORE INTO processed_updates VALUES(?,?)').bind(updateId,at));
       await db.batch(changes);
     },
@@ -173,8 +223,18 @@ export function createStore(db) {
       const result=await run("UPDATE notification_delivery SET status='sending',attempts=attempts+1,updated_at=? WHERE incident_id=? AND status='pending' AND retry_at<=?",now,id,now);
       return (result.meta?.changes ?? result.changes ?? 0)>0;
     },
-    noticeState(id,status,now,{retryAt=0,errorKind=null,messageId=null}={}) {
-      return run('UPDATE notification_delivery SET status=?,retry_at=?,error_kind=?,telegram_message_id=?,updated_at=? WHERE incident_id=?',status,retryAt,errorKind,messageId,now,id);
+    async noticeState(id,status,now,{retryAt=0,errorKind=null,messageId=null}={}) {
+      const statement=db.prepare('UPDATE notification_delivery SET status=?,retry_at=?,error_kind=?,telegram_message_id=?,updated_at=? WHERE incident_id=?').bind(status,retryAt,errorKind,messageId,now,id);
+      if(status!=='sent') return statement.run();
+      if(!Number.isSafeInteger(messageId) || messageId<=0) throw new RangeError('Confirmed delivery needs a Telegram message ID');
+      await ensureLinkWarnings();
+      // Delivery proof must survive notification and incident retention. If this
+      // transaction fails after Telegram sent, no later link is prematurely banned.
+      const results=await db.batch([
+        statement,
+        db.prepare("UPDATE member_link_warnings SET delivered_at=CASE WHEN delivered_at=0 THEN ? ELSE delivered_at END WHERE incident_id=? AND EXISTS(SELECT 1 FROM notification_delivery n WHERE n.incident_id=member_link_warnings.incident_id AND n.status='sent') AND EXISTS(SELECT 1 FROM incidents i WHERE i.id=member_link_warnings.incident_id AND i.status='warned')").bind(now,id),
+      ]);
+      return results[0];
     },
     async latestNotice(chat) {
       await ensureExtras();
@@ -199,9 +259,12 @@ export function createStore(db) {
       return run('INSERT INTO language_preferences(scope,subject_id,language,updated_at) VALUES(?,?,?,?) ON CONFLICT(scope,subject_id) DO UPDATE SET language=excluded.language,updated_at=excluded.updated_at',scope,String(id),language,now);
     },
     async cleanup(now) {
-      await ensureExtras();
+      await ensureLinkWarnings();
       // 7 days exceeds Telegram's update retention; stale messages are never enforced.
       await db.batch([
+        // Preserve late warnings from the previous deployment before deleting
+        // their retained incidents and notification-delivery evidence.
+        db.prepare(LINK_WARNING_ADOPTION_SQL),
         db.prepare('DELETE FROM processed_updates WHERE processed_at < ?').bind(now-7*86400),
         db.prepare('DELETE FROM notification_delivery WHERE incident_id IN (SELECT id FROM incidents WHERE created_at < ?)').bind(now-30*86400),
         db.prepare('DELETE FROM admin_sessions WHERE updated_at < ?').bind(now-30*86400),

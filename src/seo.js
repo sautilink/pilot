@@ -66,7 +66,7 @@ function structuredData({ title, description, path, lang, url }) {
       featureList: lang === 'sw' ? [
         'Kuondoa links zisizoruhusiwa na forwarded messages',
         'Kuheshimu admins na posts za linked channel',
-        'Ban ya saa 24, siku 7 na permanent kwa makosa yanayojirudia',
+        'Onyo kwa link ya kwanza; ban ya saa 24, siku 7 na permanent kwa links zinazojirudia',
         'Kufuta spam ya commands bila ban, mute wala kosa',
         'Paneli ya admin na rufaa za wanachama',
         'Events, vikumbusho vya hiari na msaada wa faragha wa group',
@@ -74,7 +74,7 @@ function structuredData({ title, description, path, lang, url }) {
       ] : [
         'Unapproved link and forwarded-message moderation',
         'Admin and linked-channel exemptions',
-        '24-hour, 7-day and permanent bans for repeat offenses',
+        'First-link warning, then 24-hour, 7-day and permanent bans for repeated links',
         'Command spam deletion without a ban, mute or strike',
         'Admin dashboard and member appeals',
         'Group events, optional reminders and private group support',
