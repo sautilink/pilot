@@ -387,6 +387,7 @@ export function createControlService({ db, api, clock = () => Math.floor(Date.no
       if (['configure','whitelist_add','whitelist_remove'].includes(action)) await rememberConfiguration(db,chat,user,`before:${action}`,now);
       if (action === 'configure') {
         const settings = { ...await store.settings(chat), ...clean.settings };
+        if(Boolean(settings.welcome_button_label)!==Boolean(settings.welcome_button_url)) fail('invalid_settings');
         const statements = [db.prepare('INSERT INTO pilot_group_settings(chat_id,settings_json,updated_at) VALUES(?,?,?) ON CONFLICT(chat_id) DO UPDATE SET settings_json=excluded.settings_json,updated_at=excluded.updated_at').bind(String(chat), JSON.stringify(settings), now)];
         if (clean.language) statements.push(db.prepare("INSERT INTO language_preferences(scope,subject_id,language,updated_at) VALUES('group',?,?,?) ON CONFLICT(scope,subject_id) DO UPDATE SET language=excluded.language,updated_at=excluded.updated_at").bind(String(chat), clean.language, now));
         return await finish(operation, { ok: true, settings, language: clean.language || await base.getLanguage('group', chat) }, statements, { keys: Object.keys(clean.settings), ...(clean.language ? { language: clean.language } : {}) });
