@@ -697,7 +697,7 @@ test('admin can privately list current Pilot-known banned IDs and use existing /
   await f.command(groupMessage('/bans'));
   const reply=sent(f).at(-1).params;
   assert.equal(reply.chat_id,ADMIN,'roster must be delivered as a private message');
-  assert.match(reply.text,/Pilot · Known bans|Pilot · Ban zinazojulikana/);
+  assert.match(reply.text,/Pilot · Ban status|Pilot · Hali ya ban/);
   assert.match(reply.text,new RegExp(String(TARGET)));
   assert.match(reply.text,/\/unban USER_ID/);
   assert.doesNotMatch(reply.text,/roster-case/);
