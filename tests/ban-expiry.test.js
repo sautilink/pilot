@@ -144,3 +144,15 @@ test('failed Telegram membership read raises a temporary-ban health alert',async
   assert.equal((await f.expiry.expireGroup(GROUP)).unbanned,1);
   assert.equal((await f.db.prepare("SELECT resolved_at FROM pilot_health_events WHERE kind='ban_expiry_review'").first()).resolved_at,f.now());
 });
+
+test('read-only admin status counts overdue Pilot bans and records the scheduled sweep',async t=>{
+  const f=await fixture(t);
+  await f.ban(101);
+  f.advance(86401);
+  assert.deepEqual(await f.expiry.status(GROUP),{lastScanAt:0,pending:1});
+  await f.expiry.dueGroups();
+  assert.deepEqual(await f.expiry.status(GROUP),{lastScanAt:f.now(),pending:1});
+  assert.equal((await f.expiry.expireGroup(GROUP)).unbanned,1);
+  assert.deepEqual(await f.expiry.status(GROUP),{lastScanAt:f.now(),pending:0});
+  assert.deepEqual(await f.expiry.status('invalid'),{lastScanAt:0,pending:null});
+});
