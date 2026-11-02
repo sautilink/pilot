@@ -786,3 +786,44 @@ test('member actions preserve checker and my-cases destinations across group-to-
     assert.match(second.reply_markup.inline_keyboard[0][0].web_app.url,new RegExp('tab='+tab));
   }
 });
+
+test('single-member /bancheck stays private and does not remove ban',async t=>{
+  const f=await fixture(t);
+  const id='diagnostic-case';
+  const row=await f.store.plan({id,chat_id:GROUP,user_id:TARGET,message_id:2,event_at:NOW-60,created_at:NOW-60,strike:1,until_date:NOW-20,reasons:'["link"]'});
+  await f.store.confirm(row,NOW);
+  f.api.members.set(`${GROUP}:${TARGET}`,{status:'kicked',until_date:NOW-20,user:{id:TARGET}});
+  const before=await f.store.member(GROUP,TARGET);
+  await f.command(groupMessage(`/bancheck ${TARGET}`));
+  assert.equal(sent(f).at(-1).params.chat_id,ADMIN);
+  assert.match(sent(f).at(-1).params.text,/Telegram: BANNED/);
+  assert.match(sent(f).at(-1).params.text,/103/);
+  assert.doesNotMatch(sent(f).at(-1).params.text,/diagnostic-case/);
+  assert.equal(f.api.callsOf('unbanChatMember').length,0);
+  assert.deepEqual(await f.store.member(GROUP,TARGET),before);
+  await f.command(groupMessage('/bancheck'));
+  assert.match(sent(f).at(-1).params.text,/\/bancheck USER_ID/);
+});
+test('nonadmins cannot obtain /bancheck details or probe other members',async t=>{
+  const f=await fixture(t);
+  await f.store.member(GROUP,TARGET);
+  await f.command(groupMessage(`/bancheck ${TARGET}`,USER));
+  assert.equal(f.api.callsOf('getChatMember').filter(c=>c.params.user_id===TARGET).length,0);
+  assert.equal(sent(f).at(-1).params.chat_id,GROUP);
+  assert.doesNotMatch(sent(f).at(-1).params.text,/103|Telegram:|Historia ya makosa/);
+});
+test('private /bancheck checks fresh admin permissions and only the selected group',async t=>{
+  const f=await fixture(t);
+  const row=await f.store.plan({id:'singlecase',chat_id:GROUP,user_id:TARGET,message_id:2,event_at:NOW-60,created_at:NOW-60,strike:1,until_date:NOW+86400,reasons:'["link"]'});
+  await f.store.confirm(row,NOW);
+  await f.store.setAdminContext(ADMIN,GROUP,NOW);
+  f.api.members.set(`${GROUP}:${TARGET}`,{status:'left',user:{id:TARGET}});
+  await f.command(privateMessage(`/bancheck ${TARGET}`,ADMIN));
+  assert.equal(sent(f).at(-1).params.chat_id,ADMIN);
+  assert.match(sent(f).at(-1).params.text,/Telegram: HAJABANIWA/);
+  f.api.member(GROUP,ADMIN,'member');
+  const reads=f.api.callsOf('getChatMember').filter(c=>c.params.user_id===TARGET).length;
+  await f.command(privateMessage(`/bancheck ${TARGET}`,ADMIN));
+  assert.equal(f.api.callsOf('getChatMember').filter(c=>c.params.user_id===TARGET).length,reads);
+  assert.doesNotMatch(sent(f).at(-1).params.text,/Telegram: HAJABANIWA|103/);
+});
