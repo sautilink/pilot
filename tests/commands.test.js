@@ -146,7 +146,7 @@ test('group public commands are brief private pointers, and rules contain no adm
   }
   await f.command(groupMessage('/rules', USER));
   assert.match(sent(f).at(-1).params.text, /Link ya kwanza.*onyo/);
-  assert.match(sent(f).at(-1).params.text, /saa 24 → siku 7 → ban ya kudumu/);
+  assert.match(sent(f).at(-1).params.text, /restriction ya saa 1 → 12 → 24 → siku 3 → 7/);
   assert.doesNotMatch(sent(f).at(-1).params.text, sensitive);
   assert.equal(f.api.callsOf('getChatMember').length, 0);
 });
