@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TestD1 } from './helpers/d1.js';
 import { applySchema,createStore } from '../src/store.js';
-import { createBanRoster,formatBanRoster } from '../src/ban-roster.js';
+import { createBanRoster,formatBanRoster,classifyBanLookupFailure } from '../src/ban-roster.js';
 
 const CHAT=-1001001,NOW=1800000000;
 async function setup(t){
@@ -133,5 +133,44 @@ test('Telegram names are escaped and malformed membership responses stay unverif
   assert.match(summary,/&lt;Hidden &amp; User&gt;/);
   assert.doesNotMatch(summary,/<Hidden &/);
   assert.match(summary,/102/);
+  assert.equal((await f.store.member(CHAT,102)).active_until,NOW+86400);
+});
+
+test('known Telegram API error kinds are classified without exposing raw provider details',async()=>{
+  const examples=[
+    [{code:400,message:'Bad Request: user not found secret=BOT_TOKEN'},'user_unavailable'],
+    [{code:400,message:'Bad Request: member not found'},'user_unavailable'],
+    [{code:400,message:'Bad Request: PARTICIPANT_ID_INVALID'},'user_unavailable'],
+    [{code:403,message:'Forbidden'},'permission'],
+    [{code:400,message:'Bad Request: not enough rights'},'permission'],
+    [{code:429,message:'Too Many Requests',retryAfter:10},'rate_limited'],
+    [{code:502,message:'Bad gateway'},'telegram_unavailable'],
+    [{code:0,message:'Telegram unavailable',ambiguous:true},'telegram_unavailable'],
+    [{code:400,message:'Some other reason'},'unknown'],
+    [new Error('private password'), 'telegram_unavailable'],
+  ];
+  for(const [error,kind] of examples) assert.equal(classifyBanLookupFailure(error),kind);
+});
+test('unverified users show safe reasons and never leak raw Telegram error',async t=>{
+  const f=await setup(t);
+  await f.add(101);await f.add(102);
+  const reasons=createBanRoster({db:f.db,clock:()=>NOW,api:{
+    call:async(method,params)=>{
+      if(params.user_id===101) throw {code:400,message:'Bad Request: user not found BOT_TOKEN=confidential'};
+      throw {code:429,message:'Please wait secret-telegram-token',retryAfter:30};
+    }
+  }});
+  const result=await reasons.list(CHAT);
+  assert.equal(result.visible.length,0);
+  assert.deepEqual(result.unverified.map(r=>r.reason),['user_unavailable','rate_limited']);
+  const en=formatBanRoster(result,{language:'en'});
+  assert.match(en,/Telegram could not resolve user identity/);
+  assert.match(en,/Telegram rate limit/);
+  assert.match(en,/NOT confirmed banned/);
+  assert.doesNotMatch(en,/confidential|secret-telegram-token|Bad Request|BOT_TOKEN/);
+  const sw=formatBanRoster(result,{language:'sw'});
+  assert.match(sw,/Telegram imeshindwa kutambua user/);
+  assert.match(sw,/Kikomo cha maombi ya Telegram/);
+  assert.equal((await f.store.member(CHAT,101)).active_until,NOW+86400);
   assert.equal((await f.store.member(CHAT,102)).active_until,NOW+86400);
 });
