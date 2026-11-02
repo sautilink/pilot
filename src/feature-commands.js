@@ -88,15 +88,17 @@ function rows(language, appUrl, tab = null, chatId = null) {
 
 function incidentText(row, language, personal = false) {
   const t = labels[language];
-  const status = row.corrected ? t.corrected : ({ confirmed: t.confirmed, cancelled: t.cancelled, failed: t.failed, planned: t.planned, pending: t.planned, review: t.planned }[row.status] || t.planned);
+  const warning = Number(row.strike) === 0 && row.user_id;
+  const status = row.corrected ? t.corrected : ({ warned: language === 'en' ? 'Link warning recorded' : 'Onyo la link limerekodiwa', confirmed: t.confirmed, cancelled: t.cancelled, failed: t.failed, planned: t.planned, pending: t.planned, review: t.planned }[row.status] || t.planned);
   const reasons = Array.isArray(row.reasons) ? row.reasons.map(reason => reason === 'link' ? t.link : reason === 'forward' ? t.forward : t.otherReason).join(', ') : t.otherReason;
   const lines = [
     `<b>${t.case}</b> <code>${safe(trim(row.id, 120))}</code>`,
     `${personal ? t.group : t.member}: <code>${safe(personal ? row.chat_id : row.user_id ?? '—')}</code> · ${safe(date(row.event_at, language))}`,
-    `${safe(status)} · ${t.strike}: ${count(row.strike)}/3`,
+    `${safe(status)} · ${warning ? (language === 'en' ? 'No ban strike' : 'Hakuna kosa la ban') : `${t.strike}: ${count(row.strike)}/3`}`,
     `${t.reason}: ${safe(reasons)}`,
   ];
-  if (row.status === 'confirmed' || row.corrected) lines.push(Number(row.until_date) > 0 ? `${t.until}: ${safe(date(row.until_date, language))}` : `${t.ban}: ${t.permanent}`);
+  if (warning) lines.push(language === 'en' ? 'Link warning · no ban' : 'Onyo la link · hakuna ban');
+  else if (row.status === 'confirmed' || row.corrected) lines.push(Number(row.until_date) > 0 ? `${t.until}: ${safe(date(row.until_date, language))}` : `${t.ban}: ${t.permanent}`);
   if (!personal && row.notification) {
     const notice = { sent: t.noticeSent, pending: t.noticePending, sending: t.noticeUnknown, unknown: t.noticeUnknown, failed: t.noticeFailed, cancelled: t.noticeCancelled }[row.notification.status] || t.noticeUnknown;
     lines.push(`${t.notice}: ${notice}`);

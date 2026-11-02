@@ -78,6 +78,12 @@ async function fixture(t) {
   let updateId = 1;
   let messageId = 1;
   const moderator = createModerator({ db, api, clock: () => now });
+  // These regression cases exercise the existing progressive-ban pipeline.
+  // Fresh-member warning eligibility is covered in link-warning.test.js.
+  for (const chat of [GROUP, OTHER_GROUP]) {
+    await db.prepare('INSERT INTO member_link_warnings(chat_id,user_id,incident_id,warned_at,delivered_at) VALUES(?,?,?,?,?)')
+      .bind(String(chat), String(USER_ID), `prior-warning:${chat}:${USER_ID}`, START - 10, START - 10).run();
+  }
   return {
     db, api, moderator,
     now: () => now,
@@ -97,7 +103,7 @@ async function fixture(t) {
   };
 }
 
-test('first violation removes the message, bans for 24 hours, then announces it', async (t) => {
+test('first ban after a prior warning removes the message, bans for 24 hours, then announces it', async (t) => {
   const f = await fixture(t);
   await f.moderator.handle(f.message());
   const bans = f.api.callsOf('banChatMember');
@@ -318,8 +324,13 @@ test('an authorized admin can forgive strikes and pause/resume this group', asyn
   f.advance(1);
   await f.moderator.handle(f.message());
   const bans = f.api.callsOf('banChatMember');
-  assert.equal(bans.length, 2);
-  assert.equal(bans[1].params.until_date, f.now() + 86400);
+  assert.equal(bans.length, 1, 'forgive restores first-link warning eligibility');
+  assert.equal((await f.db.prepare('SELECT strikes FROM members WHERE chat_id=? AND user_id=?')
+    .bind(String(GROUP), String(USER_ID)).first()).strikes, 0);
+  f.advance(1);
+  await f.moderator.handle(f.message());
+  assert.equal(f.api.callsOf('banChatMember').length, 2);
+  assert.equal(f.api.callsOf('banChatMember')[1].params.until_date, f.now() + 86400);
 });
 
 test('failure to verify administrator status defers destructive actions', async (t) => {

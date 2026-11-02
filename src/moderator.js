@@ -9,8 +9,8 @@ import { createBroadcastStore } from './broadcast-store.js';
 import { createToolsCommands } from './tools-commands.js';
 import { loadUpdateContext } from './update-context.js';
 
-export const RULES = '<b>🛡 SautiLink Pilot</b>\nGroup lenye utulivu, mazungumzo yenye nafasi.\n\nLinks zisizoruhusiwa na ujumbe wa forward huondolewa.\nAdhabu: saa 24 → siku 7 → ban ya kudumu.\n\nTumia /rules kuona sheria za members, au fungua bot faraghani kwa mwongozo.';
-const ENGLISH_RULES = '<b>🛡 SautiLink Pilot</b>\nA calmer group. More room for conversation.\n\nUnapproved links and forwarded messages are removed.\nPenalties: 24 hours → 7 days → permanent ban.\n\nUse /rules for member rules, or open the bot privately for a guide.';
+export const RULES = '<b>🛡 SautiLink Pilot</b>\nGroup lenye utulivu, mazungumzo yenye nafasi.\n\nLinks zisizoruhusiwa na ujumbe wa forward huondolewa.\nLink ya kwanza isiyoruhusiwa: onyo lenye tag, bila ban. Ukirudia: saa 24 → siku 7 → ban ya kudumu, kulingana na historia ya adhabu.\nUjumbe wa forward bila link iliyokatazwa unaendelea kufuata adhabu moja kwa moja.\n\nTumia /rules kuona sheria za members, au fungua bot faraghani kwa mwongozo.';
+const ENGLISH_RULES = '<b>🛡 SautiLink Pilot</b>\nA calmer group. More room for conversation.\n\nUnapproved links and forwarded messages are removed.\nFirst unapproved link: a tagged warning without a ban. Repeat violations: 24 hours → 7 days → permanent ban, based on existing penalty history.\nForwards without a prohibited link continue directly to penalties.\n\nUse /rules for member rules, or open the bot privately for a guide.';
 const admin = m => m?.status === 'creator' || m?.status === 'administrator';
 const validId = id => Number.isSafeInteger(Number(id)) && Number(id) !== 0;
 const userId = id => validId(id) && Number(id) > 0;
@@ -136,6 +136,15 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
       await deleteMessage(message); return row.status;
     }
 
+    // A warning is its own completed outcome, never a zero-strike permanent
+    // ban. Edits, retries and later album items share the same incident.
+    if(row?.status==='warned') {
+      if(message.message_id!==row.message_id || !row.deleted) await deleteMessage(message);
+      await controlStore.audit({id:`incident:${row.id}`,chatId:chat,action:'link_warning',targetId:user,incidentId:row.id,details:{reasons:JSON.parse(row.reasons)},at:row.created_at});
+      if(snapshot.linkWarning?.incident_id!==row.id) return 'warned';
+      return await announcer.notify(row,message,false,context) ? 'notification_pending' : 'warned';
+    }
+
     // Recovery after a crash/network timeout never re-issues an uncertain ban.
     if(row && ['ban_sent','uncertain','confirmed'].includes(row.status)) {
       if(message.message_id!==row.message_id) await deleteMessage(message);
@@ -151,6 +160,21 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
       return await announcer.notify(row,message,true,context) ? 'notification_pending' : 'confirmed';
     }
     if(live.status==='kicked') { await deleteMessage(message); return 'already_banned'; }
+    if(violation.blockedLinks.length>0 && snapshot.linkWarning?.delivered_at>0 && time<=snapshot.linkWarning.delivered_at) {
+      // A queued message sent before the warning reached Telegram cannot prove
+      // that the member repeated the violation after being warned. Telegram's
+      // timestamps have second precision, so same-second messages are removed
+      // conservatively too. An unsent legacy plan may be cancelled only once
+      // deletion succeeds; a failed deletion must remain safely retryable.
+      live=await member(chat,user);
+      if(admin(live) || live.status==='kicked') {
+        if(row) await store.status(row.id,'cancelled');
+        return 'membership_changed';
+      }
+      await deleteMessage(message);
+      if(row?.status==='planned') await store.status(row.id,'cancelled');
+      return 'before_warning';
+    }
     // queued messages from the same offence episode cannot escalate the punishment.
     if(state.episode_at && (time<=state.episode_at || (state.active_until>0 && time<=state.active_until))) {
       await deleteMessage(message); return 'same_episode';
@@ -160,13 +184,40 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
       await store.override(chat,user,now); return 'admin_override';
     }
     if(!row) {
-      const strike=Math.min(3,state.strikes+1),duration=banDuration(strike);
+      // Warning eligibility is independent of legacy strikes and forward-only
+      // incidents. Preserve existing bans and continue their progression only
+      // after this member has used the new per-group link warning.
+      const warning=violation.blockedLinks.length>0 && !snapshot.linkWarning?.delivered_at;
+      const strike=warning ? 0 : Math.min(3,state.strikes+1),duration=warning ? 0 : banDuration(strike);
       row=await store.plan({id:incidentId,chat_id:chat,user_id:user,message_id:message.message_id,event_at:time,created_at:now,strike,until_date:duration ? now+duration : 0,reasons:JSON.stringify(violation.reasons)});
+    }
+    if(row.status==='planned' && row.strike>0 && violation.blockedLinks.length>0 && !snapshot.linkWarning?.delivered_at) {
+      // Unsent plans from the previous policy, including a definite Telegram
+      // rate-limit rejection, have not punished this member. Honor the warning
+      // requirement before sending a ban. Uncertain or completed bans reconciled
+      // above retain their original meaning and must never be blindly replayed.
+      await store.run("UPDATE incidents SET strike=0,until_date=0 WHERE id=? AND status='planned' AND NOT EXISTS(SELECT 1 FROM member_link_warnings w WHERE w.chat_id=incidents.chat_id AND w.user_id=incidents.user_id AND w.delivered_at>0)",row.id);
+      row=await store.incident(row.id);
     }
     // Fresh verification immediately before destructive actions, never cached admin lists.
     live=await member(chat,user);
     if(admin(live) || live.status==='kicked') { await store.status(row.id,'cancelled'); return 'membership_changed'; }
     await deleteMessage(message);
+    if(row.strike===0) {
+      // A retry may arrive through a different album item after the original
+      // delete failed. Confirm both removals before consuming the warning.
+      if(message.message_id!==row.message_id && !row.deleted) await deleteMessage({...message,message_id:row.message_id});
+      row=await store.confirmWarning(row,now);
+      if(row?.status!=='warned') {
+        // The coordinator serializes all chat work. A conflicting external
+        // writer or override must still never turn strike zero into a ban.
+        if(row?.status==='planned') await store.status(row.id,'review');
+        return row?.status==='cancelled' ? 'cancelled' : 'review';
+      }
+      await controlStore.audit({id:`incident:${row.id}`,chatId:chat,action:'link_warning',targetId:user,incidentId:row.id,details:{reasons:violation.reasons},at:now});
+      if(!row.warning_current) return 'warned';
+      return await announcer.notify(row,message,false,context) ? 'notification_pending' : 'warned';
+    }
     await store.run('UPDATE incidents SET deleted=1 WHERE id=?',row.id);
     live=await member(chat,user);
     if(admin(live) || live.status==='kicked') { await store.status(row.id,'cancelled'); return 'membership_changed'; }

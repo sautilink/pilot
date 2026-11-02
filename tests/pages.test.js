@@ -226,7 +226,7 @@ function simulatorHarness(lang = 'sw') {
   const elements = Object.fromEntries([...html.matchAll(/id="(sim-[a-z-]+)"/g)].map(match => [match[1], element()]));
   const scenarios = ['blocked', 'allowed', 'forward', 'admin', 'linked'].map(scenario => element({ scenario }));
   const groups = ['A', 'B'].map(simGroup => element({ simGroup }));
-  const stages = ['1', '2', '3'].map(stage => element({ stage }));
+  const stages = ['0', '1', '2', '3'].map(stage => element({ stage }));
   let calls = 0;
   vm.runInNewContext(script, {
     document: {
@@ -247,6 +247,10 @@ function simulatorHarness(lang = 'sw') {
 test('simulator separates groups and caps the repeated-offense demonstration at permanent', () => {
   const h = simulatorHarness();
   assert.equal(h.elements['sim-count'].textContent, '0 / 3');
+  h.run();
+  assert.equal(h.elements['sim-count'].textContent, '0 / 3');
+  assert.equal(h.elements['sim-outcome-title'].textContent, 'Onyo la link. Hakuna ban.');
+  assert.match(h.elements['sim-announcement'].textContent, /@Juma.*Ukirudia/);
   h.run();
   assert.equal(h.elements['sim-count'].textContent, '1 / 3');
   assert.equal(h.elements['sim-outcome-title'].textContent, 'Ban ya saa 24.');
@@ -274,6 +278,7 @@ test('simulator separates groups and caps the repeated-offense demonstration at 
 
 test('simulator preserves strikes for whitelisted links, admins and linked channel examples', () => {
   const h = simulatorHarness();
+  h.run();
   h.run();
   for (const scenario of ['allowed', 'admin', 'linked']) {
     h.scenario(scenario);
@@ -349,6 +354,10 @@ test('English demo translates messages, decisions and time progression without c
   const h = simulatorHarness('en');
   assert.equal(h.elements['sim-outcome-title'].textContent, 'What will Pilot do?');
   assert.equal(h.elements['sim-message'].textContent, 'Join this offer:\nhttps://offers.example/today');
+  h.run();
+  assert.equal(h.elements['sim-outcome-title'].textContent, 'Link warning. No ban.');
+  assert.equal(h.elements['sim-count'].textContent, '0 / 3');
+  assert.match(h.elements['sim-announcement'].textContent, /@Juma.*another prohibited link will trigger a ban/);
   h.run();
   assert.equal(h.elements['sim-outcome-title'].textContent, 'Banned for 24 hours.');
   assert.equal(h.elements['sim-announcement'].textContent, 'Juma has been banned for 24 hours.\nReason: Posting an unapproved link.');

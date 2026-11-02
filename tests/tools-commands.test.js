@@ -103,9 +103,10 @@ test('other-bot commands are not executed, and ordinary link enforcement runs fi
   assert.equal(await f.handle('/ask@OtherBot guide'),true);assert.equal(f.sends().length,0);
   assert.equal(await f.handle('An ordinary message'),false);
   const update=f.update('/ask@OtherBot https://unapproved.example/spam');await f.moderator.handle(update);
-  assert.equal(f.calls.filter(call=>call.method==='banChatMember').length,1);
+  assert.equal(f.calls.filter(call=>call.method==='banChatMember').length,0);
   assert.equal(f.calls.filter(call=>call.method==='deleteMessage').length,1);
-  assert.equal((await f.base.member(GROUP,MEMBER)).strikes,1);
+  assert.equal((await f.base.member(GROUP,MEMBER)).strikes,0);
+  assert.ok(await f.base.linkWarning(GROUP,MEMBER));
 });
 
 test('anonymous admins and channel senders cannot trigger private tool mutations',async t=>{

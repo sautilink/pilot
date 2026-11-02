@@ -12,8 +12,8 @@ export function memberName(user,language='sw') {
 
 export function publicGroupRules(settings,language='sw') {
   const base=language==='en'
-    ? 'Unapproved links and forwarded messages are removed. Penalties: 24 hours → 7 days → permanent ban.'
-    : 'Links zisizoruhusiwa na ujumbe wa forward huondolewa. Adhabu: saa 24 → siku 7 → ban ya kudumu.';
+    ? 'First prohibited link: delete and tag with a warning. Repeated links: 24 hours → 7 days → permanent ban. Forwards without a prohibited link start directly with a ban.'
+    : 'Link ya kwanza isiyoruhusiwa: futa na tag kwa onyo. Links zinazofuata: saa 24 → siku 7 → ban ya kudumu. Forward bila link iliyokatazwa huanza na ban moja kwa moja.';
   const commands=settings?.command_spam_enabled!==false
     ? language==='en'
       ? 'Messages made up of unapproved long /command codes are silently deleted. This does not add a ban, mute or strike. Ordinary bot commands remain available.'

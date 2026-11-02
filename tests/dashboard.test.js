@@ -91,7 +91,7 @@ async function settingsHarness(language = 'en', saved = {}, options = {}) {
   const overview = { group, language: options.groupLanguage || language, moderation: { enabled: true, permissionsComplete: true }, settings: {
     welcome_enabled: false, welcome_sw: '', welcome_en: '', rules_sw: '', rules_en: '', notice_template: 'detailed', notice_sw: '', notice_en: '',
     flood_enabled: false, flood_limit: 8, flood_window: 10, flood_action: 'delete', flood_mute_seconds: 300, join_gate_enabled: false, join_gate_mode: 'review', ...saved,
-  }, subscription: { alerts: false, report: 'off' }, rules: [], incidents: [], appeals: [], joins: [], audit: [], stats: {} };
+  }, subscription: { alerts: false, report: 'off' }, rules: [], incidents: options.incidents || [], appeals: [], joins: [], audit: [], stats: {} };
   const html = renderDashboard({ lang: language });
   // Materialize the actual server-rendered SVG templates. The client must clone
   // their artwork; this mock does not supply substitute paths or a fake factory.
@@ -157,6 +157,16 @@ test('settings render the default-on delete-only filter and submit scoped except
   assert.equal(mutation.options.headers.Authorization, 'tma public-test-init-data');
   assert.equal(Object.hasOwn(mutation.body.input.settings, 'command_spam_action'), false);
   assert.equal(Object.hasOwn(mutation.body.input.settings, 'command_spam_mute_seconds'), false);
+});
+
+test('warning case cards never label strike zero as permanent or offer ban mutations', async () => {
+  const h = await settingsHarness('en', {}, { url: 'https://pilot.sautilink.com/app?tab=incidents&group=-1001001&lang=en', incidents: [
+    { id: 'warning-1', chat_id: '-1001001', user_id: '101', strike: 0, until_date: 0, event_at: 1792670400, status: 'warned', reasons: ['link'], notification: { status: 'sent' } },
+  ] });
+  assert.match(h.content.textContent, /Link warning recorded/);
+  assert.match(h.content.textContent, /No ban strike/);
+  assert.match(h.content.textContent, /Link warning · no ban/);
+  assert.doesNotMatch(h.content.textContent, /Permanent ban|Remove ban|Correct one strike/);
 });
 
 test('saved off state stays off and welcome preview follows the toggle in both languages', async () => {

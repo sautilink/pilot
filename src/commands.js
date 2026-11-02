@@ -33,7 +33,10 @@ const copy = {
     denied: 'Ombi hili linapatikana kwa wasimamizi wa group hili.',
     strikesUsage: 'Tumia <code>/strikes USER_ID</code> kwa ID ya mtumiaji katika group ulilochagua.',
     bancheckUsage: 'Tumia <code>/bancheck USER_ID</code> kupata hali ya member mmoja bila kubadilisha ban.',
-    strikes: 'Mtumiaji <code>{user}</code>: makosa {strikes} kati ya 3 katika group hili.',
+    strikes: 'Mtumiaji <code>{user}</code>: makosa ya ban {strikes} kati ya 3 katika group hili.\nOnyo la link: {warning}.',
+    warningDelivered: 'kutumwa kumethibitishwa; link inayofuata isiyoruhusiwa itafuata kiwango cha ban',
+    warningPending: 'limeandikwa lakini kutumwa hakujathibitishwa; links zinazofuata zitafutwa na kukumbushwa bila kosa la ban',
+    warningDue: 'bado; link ya kwanza isiyoruhusiwa itapata onyo bila kuongeza kosa',
     group: 'Group lako',
     readOnly: 'Tuma /{command} ndani ya group unalosimamia. Amri hii hutekelezwa kwenye group lenyewe; majibu yake ya kina yatakuja hapa. Fungua /dashboard kwa mipangilio na ukaguzi wa matukio.',
     demo: '🧪 <b>TANGAZO LA MAJARIBIO — SautiLink Pilot</b>\n\nHuu ni mfano wa tangazo la usimamizi. Hakuna mtu aliyefungiwa, hakuna ujumbe uliofutwa, na hakuna kosa lililoongezwa.',
@@ -45,7 +48,7 @@ const copy = {
     targetUsage: 'Reply kwa ujumbe wa mtumiaji ndani ya group au tumia <code>/{command} USER_ID</code>. Username pekee haitoshi kutambua mtu kwa uhakika.',
     unbanUnknown: 'Kuondolewa kwa ban hakujathibitishwa. Admin kagua hali ya mtumiaji kwenye Telegram kabla ya kurudia amri.',
     unbanned: 'Ban imeondolewa. Mtumiaji anaweza kujiunga tena. Historia ya makosa imehifadhiwa.',
-    forgiven: 'Historia ya makosa ya mtumiaji katika group hili imesafishwa. Tumia /unban ndani ya group ikiwa pia unataka kuondoa ban iliyopo.',
+    forgiven: 'Historia ya makosa na onyo la link la mtumiaji katika group hili vimesafishwa. Link inayofuata isiyoruhusiwa itapata onyo jipya. Tumia /unban ndani ya group ikiwa pia unataka kuondoa ban iliyopo.',
     groupLanguageUsage: 'Tuma <code>/language sw</code> kwa Kiswahili au <code>/language en</code> kwa English ndani ya group. Chaguo hili hubadili ujumbe wa group hilo pekee.',
     groupLanguageSaved: 'Lugha ya group imehifadhiwa: <b>{language}</b>. Lugha yako ya faragha ina chaguo lake tofauti kwenye /language.',
   },
@@ -58,7 +61,10 @@ const copy = {
     denied: 'This request is available to this group’s admins.',
     strikesUsage: 'Use <code>/strikes USER_ID</code> for a member of the group you selected.',
     bancheckUsage: 'Use <code>/bancheck USER_ID</code> to inspect one member without changing their ban.',
-    strikes: 'Member <code>{user}</code>: {strikes} of 3 strikes in this group.',
+    strikes: 'Member <code>{user}</code>: {strikes} of 3 ban strikes in this group.\nLink warning: {warning}.',
+    warningDelivered: 'delivery confirmed; the next prohibited link follows the ban sequence',
+    warningPending: 'recorded, delivery unconfirmed; later links are deleted with a reminder without a ban strike',
+    warningDue: 'still due; the first prohibited link receives a warning without a strike',
     group: 'Your group',
     readOnly: 'Send /{command} inside the group you manage. This command runs in the group itself; detailed replies are delivered here. Open /dashboard for settings and case reviews.',
     demo: '🧪 <b>TEST ANNOUNCEMENT — SautiLink Pilot</b>\n\nThis is a sample moderation notice. Nobody was banned, no message was deleted, and no strike was added.',
@@ -70,7 +76,7 @@ const copy = {
     targetUsage: 'Reply to the member’s message inside the group or use <code>/{command} USER_ID</code>. A username alone cannot reliably identify the member.',
     unbanUnknown: 'Removal of the ban is unconfirmed. Check the member’s Telegram status before repeating the command.',
     unbanned: 'The ban was removed. The member may rejoin. Strike history was preserved.',
-    forgiven: 'The member’s strike history in this group was cleared. Send /unban inside the group if you also want to remove an existing ban.',
+    forgiven: 'The member’s strike history and link warning in this group were cleared. Their next prohibited link receives a new warning. Send /unban inside the group if you also want to remove an existing ban.',
     groupLanguageUsage: 'Send <code>/language sw</code> for Kiswahili or <code>/language en</code> for English inside the group. This changes only that group’s messages.',
     groupLanguageSaved: 'Group language saved: <b>{language}</b>. Your private language preference is separate and can be changed with /language.',
   },
@@ -417,7 +423,8 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
           await quietSend(message.chat.id, textFor(language, 'strikesUsage'), { reply_markup: renderBotPage('admin', { groupId: choice.chat.id, language }).reply_markup });
         } else {
           const state = await store.member(choice.chat.id, argument);
-          await quietSend(message.chat.id, `<b>${escapeHtml(choice.chat.title || textFor(language, 'group'))}</b>\n${textFor(language, 'strikes', { user: Number(argument), strikes: state.strikes })}`, { reply_markup: renderBotPage('admin', { groupId: choice.chat.id, language }).reply_markup });
+          const warning = await store.linkWarning(choice.chat.id, argument);
+          await quietSend(message.chat.id, `<b>${escapeHtml(choice.chat.title || textFor(language, 'group'))}</b>\n${textFor(language, 'strikes', { user: Number(argument), strikes: state.strikes, warning: textFor(language, warning?.delivered_at ? 'warningDelivered' : warning ? 'warningPending' : 'warningDue') })}`, { reply_markup: renderBotPage('admin', { groupId: choice.chat.id, language }).reply_markup });
         }
       } else {
         await quietSend(message.chat.id, textFor(language, 'readOnly', { command }), { reply_markup: renderBotPage('admin', { groupId: choice.chat.id, language }).reply_markup });
@@ -511,7 +518,8 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     }
     const state = await store.member(chat, target);
     if (command === 'strikes') {
-      await privateReply(message, bot, `<b>${escapeHtml(message.chat.title || textFor(personalLanguage, 'group'))}</b>\n${textFor(personalLanguage, 'strikes', { user: Number(target), strikes: state.strikes })}`, language);
+      const warning = await store.linkWarning(chat, target);
+      await privateReply(message, bot, `<b>${escapeHtml(message.chat.title || textFor(personalLanguage, 'group'))}</b>\n${textFor(personalLanguage, 'strikes', { user: Number(target), strikes: state.strikes, warning: textFor(personalLanguage, warning?.delivered_at ? 'warningDelivered' : warning ? 'warningPending' : 'warningDue') })}`, language);
       return true;
     }
     if (!Number.isSafeInteger(updateId)) return true;

@@ -15,10 +15,11 @@ export function groupPicker(language='en') {
 }
 
 export function simulatePolicy({input,settings,rules,enabled=true}) {
-  objectKeys(input,['text','caption','forwarded','sender','priorStrikes','format','proposedSettings','extraRules','messagesInWindow']);
+  objectKeys(input,['text','caption','forwarded','sender','priorStrikes','linkWarned','format','proposedSettings','extraRules','messagesInWindow']);
   const text=textValue(input.text??'',4096,true),caption=textValue(input.caption??'',1024,true);
   if(!text&&!caption&&!input.forwarded)fail('invalid_input');
   if(input.forwarded!==undefined&&typeof input.forwarded!=='boolean')fail('invalid_input');
+  if(input.linkWarned!==undefined&&typeof input.linkWarned!=='boolean')fail('invalid_input');
   const sender=input.sender??'member',priorStrikes=input.priorStrikes??0,format=input.format??'plain';
   if(!['member','admin','anonymous_admin','linked_channel'].includes(sender)||!Number.isInteger(priorStrikes)||priorStrikes<0||priorStrikes>100||!['plain','code'].includes(format))fail('invalid_input');
   if(input.messagesInWindow!==undefined&&(!Number.isInteger(input.messagesInWindow)||input.messagesInWindow<1||input.messagesInWindow>100))fail('invalid_input');
@@ -27,10 +28,11 @@ export function simulatePolicy({input,settings,rules,enabled=true}) {
   if(input.extraRules!==undefined){if(!Array.isArray(input.extraRules)||input.extraRules.length>20)fail('invalid_input');try{effectiveRules=[...rules,...input.extraRules.map(normalizeWhitelistRule)];}catch{fail('invalid_rule');}}
   const message={text,caption,...(input.forwarded?{forward_origin:{type:'user',date:1,sender_user:{id:1}}}:{})};
   if(format==='code'){if(text)message.entities=[{type:'code',offset:0,length:text.length}];if(caption)message.caption_entities=[{type:'code',offset:0,length:caption.length}];}
-  const output={simulated:true,scenario:{sender,priorStrikes},decision:'allow',reasons:[],strike:null,durationSeconds:null,usesProposedSettings:!!input.proposedSettings||!!input.extraRules,conditions:['current_member','fresh_admin_check','bot_permissions','message_age','human_overrides']};
+  const output={simulated:true,scenario:{sender,priorStrikes,linkWarned:!!input.linkWarned},decision:'allow',reasons:[],strike:null,durationSeconds:null,usesProposedSettings:!!input.proposedSettings||!!input.extraRules,conditions:['current_member','fresh_admin_check','bot_permissions','message_age','human_overrides']};
   if(sender!=='member')return {...output,decision:'exempt',reasons:[sender]};
   if(!enabled)return {...output,decision:'paused',reasons:['moderation_paused']};
   const analyzed=analyzeMessage(message,effectiveRules);
+  if(analyzed.blockedLinks.length&&!input.linkWarned)return {...output,decision:'delete_and_warn',reasons:analyzed.reasons,blockedLinks:analyzed.blockedLinks.length};
   if(analyzed.reasons.length){const strike=Math.min(3,priorStrikes+1);return {...output,decision:'delete_and_ban',reasons:analyzed.reasons,strike,durationSeconds:banDuration(strike),blockedLinks:analyzed.blockedLinks.length};}
   const spam=detectCommandSpam(message,proposed.command_spam_allowlist||'');
   if(spam)return {...output,decision:proposed.command_spam_enabled===false?'allow':'delete_only',reasons:[proposed.command_spam_enabled===false?'command_filter_off':'command_spam']};
