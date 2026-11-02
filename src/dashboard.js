@@ -139,7 +139,14 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
   function sectionHeading(title, description, toggleControl, iconName = 'settings') { const box = el('div', 'setting-heading'); const text = el('div'); append(text, append(el('h3', 'setting-title'), icon(iconName), document.createTextNode(title)), el('p', '', description)); append(box, text, toggleControl); return box; }
   function title(heading, description, actions = []) { const row = el('div', 'title-row'); const words = el('div'); append(words, el('div', 'eyebrow', state.overview && !['mystatus', 'checklink'].includes(state.view) ? state.overview.group.title : t('Nafasi yako ya faragha', 'Your private workspace')), el('h1', '', heading), el('p', '', description)); append(row, words, actions.length ? append(el('div', 'title-actions'), actions) : null); return row; }
   function kv(label, value, iconName) { return append(el('div', 'kv'), append(el('span', 'kv-label'), iconName ? icon(iconName) : null, document.createTextNode(label)), typeof value === 'string' ? el('span', 'kv-value', value) : value); }
-  function changeView(view) { if (state.busy) return; state.view = view; $('banner').hidden = true; render(); if (view === 'mystatus' && !state.own) loadOwn(); }
+  function changeView(view) {
+    if (state.busy) return;
+    state.view = view;
+    // Retain the selected task when Telegram reloads or the user changes language.
+    try { const url = new URL(location.href); url.searchParams.set('tab', view); url.searchParams.delete('view'); history.replaceState(null, '', url.href); }
+    catch { /* Mini App navigation still works if history is restricted. */ }
+    $('banner').hidden = true; render(); if (view === 'mystatus' && !state.own) loadOwn();
+  }
   function navigation() {
     const nav = $('sidebar'); nav.replaceChildren(); const inner = el('div', 'sidebar-inner');
     const groupItems = [['overview', t('Muhtasari', 'Overview')], ['incidents', t('Matukio', 'Incidents')], ['appeals', t('Rufaa', 'Appeals')], ['joins', t('Wanaojiunga', 'Join requests')], ['settings', t('Mipangilio', 'Settings')], ['whitelist', t('Links zinazoruhusiwa', 'Allowed links')], ['activity', t('Shughuli za admins', 'Admin activity')]];
@@ -151,7 +158,7 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
     if (state.groups.length) inner.append(navigationGroup(groupItems, t('Usimamizi wa group', 'Group management'), 'sidebar-groups'));
     inner.append(navigationGroup([['mystatus', t('Matukio yangu', 'My cases')], ['checklink', t('Kagua link', 'Check a link')]], t('Zana zako', 'Your tools'), 'sidebar-personal'));
     const toolsLink=el('a','nav-button');append(toolsLink,icon('settings'),el('span','',t('Zana za jumuiya','Community tools')));
-    const toolsUrl=new URL('/tools',location.href);toolsUrl.searchParams.set('lang',language);if(state.chatId)toolsUrl.searchParams.set('chat',state.chatId);
+    const toolsUrl=new URL('/tools',location.href);toolsUrl.searchParams.set('lang',language);toolsUrl.searchParams.set('returnTab',state.view);if(state.chatId)toolsUrl.searchParams.set('chat',state.chatId);
     const selectedTheme=new URL(location.href).searchParams.get('theme');if(['light','dark'].includes(selectedTheme))toolsUrl.searchParams.set('theme',selectedTheme);
     // Signed launch data stays in a fragment on these two trusted Mini App routes.
     toolsUrl.hash=new URL(location.href).hash;toolsLink.href=toolsUrl.pathname+toolsUrl.search+toolsUrl.hash;toolsLink.referrerPolicy='no-referrer';inner.append(toolsLink);
