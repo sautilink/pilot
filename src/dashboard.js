@@ -139,7 +139,16 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
   function sectionHeading(title, description, toggleControl, iconName = 'settings') { const box = el('div', 'setting-heading'); const text = el('div'); append(text, append(el('h3', 'setting-title'), icon(iconName), document.createTextNode(title)), el('p', '', description)); append(box, text, toggleControl); return box; }
   function title(heading, description, actions = []) { const row = el('div', 'title-row'); const words = el('div'); append(words, el('div', 'eyebrow', state.overview && !['mystatus', 'checklink'].includes(state.view) ? state.overview.group.title : t('Nafasi yako ya faragha', 'Your private workspace')), el('h1', '', heading), el('p', '', description)); append(row, words, actions.length ? append(el('div', 'title-actions'), actions) : null); return row; }
   function kv(label, value, iconName) { return append(el('div', 'kv'), append(el('span', 'kv-label'), iconName ? icon(iconName) : null, document.createTextNode(label)), typeof value === 'string' ? el('span', 'kv-value', value) : value); }
-  function changeView(view) { if (state.busy) return; state.view = view; $('banner').hidden = true; render(); if (view === 'mystatus' && !state.own) loadOwn(); }
+  function changeView(view) {
+    if (state.busy) return;
+    state.view = view;
+    // Retain the selected task when Telegram reloads or the user changes language.
+    try { const url = new URL(location.href); url.searchParams.set('tab', view); url.searchParams.delete('view'); history.replaceState(null, '', url.href); }
+    catch { /* Mini App navigation still works if history is restricted. */ }
+    $('banner').hidden = true; render();
+    if (view === 'mystatus' && !state.own) loadOwn();
+    else if (!['mystatus','checklink'].includes(view) && state.chatId && !state.overview) loadGroup();
+  }
   function navigation() {
     const nav = $('sidebar'); nav.replaceChildren(); const inner = el('div', 'sidebar-inner');
     const groupItems = [['overview', t('Muhtasari', 'Overview')], ['incidents', t('Matukio', 'Incidents')], ['appeals', t('Rufaa', 'Appeals')], ['joins', t('Wanaojiunga', 'Join requests')], ['settings', t('Mipangilio', 'Settings')], ['whitelist', t('Links zinazoruhusiwa', 'Allowed links')], ['activity', t('Shughuli za admins', 'Admin activity')]];
@@ -151,7 +160,7 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
     if (state.groups.length) inner.append(navigationGroup(groupItems, t('Usimamizi wa group', 'Group management'), 'sidebar-groups'));
     inner.append(navigationGroup([['mystatus', t('Matukio yangu', 'My cases')], ['checklink', t('Kagua link', 'Check a link')]], t('Zana zako', 'Your tools'), 'sidebar-personal'));
     const toolsLink=el('a','nav-button');append(toolsLink,icon('settings'),el('span','',t('Zana za jumuiya','Community tools')));
-    const toolsUrl=new URL('/tools',location.href);toolsUrl.searchParams.set('lang',language);if(state.chatId)toolsUrl.searchParams.set('chat',state.chatId);
+    const toolsUrl=new URL('/tools',location.href);toolsUrl.searchParams.set('lang',language);toolsUrl.searchParams.set('returnTab',state.view);if(state.chatId)toolsUrl.searchParams.set('chat',state.chatId);
     const selectedTheme=new URL(location.href).searchParams.get('theme');if(['light','dark'].includes(selectedTheme))toolsUrl.searchParams.set('theme',selectedTheme);
     // Signed launch data stays in a fragment on these two trusted Mini App routes.
     toolsUrl.hash=new URL(location.href).hash;toolsLink.href=toolsUrl.pathname+toolsUrl.search+toolsUrl.hash;toolsLink.referrerPolicy='no-referrer';inner.append(toolsLink);
@@ -386,29 +395,48 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
     }
   }
   async function refreshData() {
+    if (state.view === 'checklink') { $('banner').hidden = true; render(); return; }
     if (state.view === 'mystatus') { state.own = null; render(); await loadOwn(); return; }
     if (state.chatId) await loadGroup(); else await loadOwn();
   }
   async function start() {
     try { app?.ready(); app?.expand(); if (app?.isVersionAtLeast?.('6.1')) { const color = document.documentElement?.dataset?.theme === 'dark' ? '#0b0b0e' : '#ffffff'; app.setHeaderColor(color); app.setBackgroundColor(color); } } catch { /* Older Telegram clients still use the standard page. */ }
     if (!initData) return;
-    $('login').hidden = true; $('app').hidden = false; $('content').append(loading());
+    const params = new URLSearchParams(location.search);
+    const hint = params.get('view') || params.get('tab');
+    const requestedView = ({ links: 'whitelist', mycases: 'mystatus', checker: 'checklink' })[hint] || hint;
+    const validViews = ['overview', 'incidents', 'appeals', 'joins', 'settings', 'whitelist', 'activity', 'mystatus', 'checklink'];
+    // Resolve the requested action before any network requests. Personal
+    // actions must never wait for the potentially slow group-admin roster.
+    state.view = validViews.includes(requestedView) ? requestedView : 'overview';
+    $('login').hidden = true; $('app').hidden = false;
+    render();
+    const personalTask = state.view === 'mystatus' ? loadOwn() : null;
     try {
       const data = await query('groups', null); state.groups = data.groups || []; state.groupsCursor = data.nextCursor || null;
-      const params = new URLSearchParams(location.search); const preferred = params.get('chat') || params.get('group');
+      const preferred = params.get('chat') || params.get('group');
       let preferredOverview = null;
       if (preferred && /^-[1-9]\d{0,15}$/.test(preferred) && !state.groups.some(group => String(group.id) === preferred)) {
         try { preferredOverview = await query('overview', preferred); appendGroups([preferredOverview.group]); } catch { /* A display hint never grants access. */ }
       }
       state.chatId = String(state.groups.find(group => String(group.id) === preferred)?.id || state.groups[0]?.id || '') || null;
       if (preferredOverview && String(preferredOverview.group.id) === state.chatId) state.overview = preferredOverview;
-      const hint = params.get('view') || params.get('tab'); const requestedView = ({ links: 'whitelist', mycases: 'mystatus', checker: 'checklink' })[hint] || hint; const validViews = ['overview', 'incidents', 'appeals', 'joins', 'settings', 'whitelist', 'activity', 'mystatus', 'checklink'];
-      state.view = validViews.includes(requestedView) ? requestedView : state.groups.length ? 'overview' : 'mystatus';
       if (!state.groups.length && !['mystatus', 'checklink'].includes(state.view)) state.view = 'mystatus';
       $('header-state').replaceChildren(icon('verified'), document.createTextNode(t('Telegram imethibitishwa', 'Telegram verified')));
-      render(); if (state.chatId && !state.overview) await loadGroup(); if (state.view === 'mystatus') await loadOwn();
+      // Keep text already entered while the group list was loading.
+      const checkerText = state.view === 'checklink' ? $('field-checkText')?.value : null;
+      render();
+      if (checkerText != null && $('field-checkText')) $('field-checkText').value = checkerText;
+      if (state.chatId && !state.overview && !['mystatus', 'checklink'].includes(state.view)) await loadGroup();
+      if (state.view === 'mystatus' && !personalTask) await loadOwn();
       if (!state.groups.length) { const tip = info(t('Unasimamia group? Tuma /admin kwenye group hilo, kisha fungua kiungo cha faragha. Group litaonekana hapa baada ya nafasi yako kuthibitishwa.', 'Manage a group? Send /admin in that group, then open the private link. It will appear here after your admin role is verified.')); $('content').prepend(tip); }
-    } catch (error) { showError(error); $('content').replaceChildren(empty(t('Fungua tena kupitia Telegram', 'Reopen through Telegram'), errorText(error.code), button(t('Fungua bot', 'Open bot'), () => { location.href = 'https://t.me/sautilinkpilotbot?start=dashboard'; }, 'secondary', 'send'))); }
+    } catch (error) {
+      showError(error);
+      // Group discovery may be unavailable while personal actions still work.
+      // Do not replace a working checker or personal case view with Home.
+      if (['mystatus','checklink'].includes(state.view)) return;
+      $('content').replaceChildren(empty(t('Fungua tena kupitia Telegram', 'Reopen through Telegram'), errorText(error.code), button(t('Fungua bot', 'Open bot'), () => { location.href = 'https://t.me/sautilinkpilotbot?start=dashboard'; }, 'secondary', 'send')));
+    }
   }
   $('group-select').addEventListener('change', event => { if (state.busy) return; state.chatId = event.target.value; loadGroup(); });
   $('more-groups').addEventListener('click', loadMoreGroups);

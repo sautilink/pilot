@@ -204,7 +204,16 @@ function toolsClient(language, eatTimestamp, makeRequestId, careFactory, doctorC
       [t('Pilot', 'Pilot'), state.owner?['performance','feedback']:['feedback']],
     ] : [[t('Community', 'Community'), state.chatId ? ['events', 'knowledge', 'support','feedback'] : ['feedback']],...(state.owner?[[t('Mmiliki wa Pilot','Pilot owner'),['performance']]]:[])];
     $('tools-nav').replaceChildren();
-    for (const [label, items] of groups) { const section = add(el('div', 'nav-group'), el('p', 'nav-label', label)); for (const key of items) { const node = button(names[key], () => { if (!state.busy) { state.view = key; state.editing = null; renderNav(); load(); } }, '', key); node.className = 'nav-button'; node.setAttribute('aria-current', state.view === key ? 'page' : 'false'); section.append(node); } $('tools-nav').append(section); }
+    for (const [label, items] of groups) { const section = add(el('div', 'nav-group'), el('p', 'nav-label', label)); for (const key of items) { const node = button(names[key], () => { if (!state.busy) { state.view = key; state.editing = null; rememberLocation(); renderNav(); load(); } }, '', key); node.className = 'nav-button'; node.setAttribute('aria-current', state.view === key ? 'page' : 'false'); section.append(node); } $('tools-nav').append(section); }
+  }
+  function rememberLocation() {
+    try {
+      const url = new URL(location.href);
+      url.searchParams.set('section', state.view);
+      url.searchParams.delete('view');
+      if (state.chatId) url.searchParams.set('chat', String(state.chatId));
+      history.replaceState(null, '', url.href);
+    } catch { /* Navigation works without history support. */ }
   }
   function pageHeader() { return add(el('div', 'title'), el('div', 'eyebrow', t('SAUTILINK PILOT · ZANA ZA COMMUNITY', 'SAUTILINK PILOT · COMMUNITY TOOLS')), el('h1', '', names[state.view]), el('p', '', descriptions[state.view])); }
   function viewFor() { if (['doctor','support'].includes(state.view))return state.view;if (['schedule', 'events', 'highlights'].includes(state.view)) return state.admin ? 'operations' : 'events'; if (['inbox', 'knowledge', 'community'].includes(state.view)) return state.admin ? 'community' : 'faq'; if (['presets', 'links', 'raid', 'integrations'].includes(state.view)) return 'governance'; return null; }
@@ -416,6 +425,7 @@ function toolsClient(language, eatTimestamp, makeRequestId, careFactory, doctorC
       const previous = more ? state.groups : []; state.groups = [...previous, ...(data.groups || [])].filter((row, index, rows) => rows.findIndex(other => String(other.id) === String(row.id)) === index); state.cursor = data.nextCursor || null; state.owner = data.owner === true;
       if (!more || !state.chatId) state.chatId = groupHint && (state.groups.some(group => String(group.id) === String(groupHint)) || ['events', 'knowledge','support'].includes(state.view)) ? groupHint : state.groups[0]?.id ? String(state.groups[0].id) : groupHint;
       state.admin = state.groups.some(group => String(group.id) === String(state.chatId));
+      const requestedView = state.view;
       if ((!state.admin && !['events', 'knowledge', 'support','feedback'].includes(state.view)&&!(state.owner&&state.view==='performance'))||state.view==='performance'&&!state.owner) state.view = state.chatId ? 'events' : 'feedback';
       const picker = $('tools-group'); picker.replaceChildren();
       for (const group of state.groups) { const option = el('option', '', group.title); option.value = String(group.id); picker.append(option); }
@@ -423,23 +433,27 @@ function toolsClient(language, eatTimestamp, makeRequestId, careFactory, doctorC
       picker.value = state.chatId || ''; $('tools-group-field').hidden = !state.chatId; $('tools-more').hidden = !state.cursor;
       $('tools-welcome').hidden = true; $('tools-app').hidden = false; renderNav();
       state.busy = false; await load();
+      // Do not silently route a requested admin action to an unrelated page.
+      if (requestedView !== state.view) showError(new Error('forbidden'));
     } catch (error) { $('tools-welcome').hidden = true; $('tools-app').hidden = false; state.view = 'feedback'; renderNav(); showError(error); $('tools-content').replaceChildren(empty(t('Session haijathibitishwa', 'Session could not be verified'), t('Fungua tena /tools kupitia bot.', 'Reopen /tools through the bot.'))); }
     finally { state.busy = false; $('tools-more').disabled = false; }
   }
-  $('tools-group').addEventListener('change', () => { if (state.busy) { $('tools-group').value = state.chatId || ''; return; } $('tools-modal').close(); state.chatId = $('tools-group').value; state.admin = state.groups.some(group => String(group.id) === String(state.chatId)); state.editing = null; if (!state.admin) state.view = 'events'; renderNav(); load(); });
+  $('tools-group').addEventListener('change', () => { if (state.busy) { $('tools-group').value = state.chatId || ''; return; } $('tools-modal').close(); state.chatId = $('tools-group').value; state.admin = state.groups.some(group => String(group.id) === String(state.chatId)); state.editing = null; if (!state.admin) state.view = 'events'; rememberLocation(); renderNav(); load(); });
   $('tools-refresh').addEventListener('click', () => { if (!state.busy) load(); });
   $('tools-more').addEventListener('click', () => groups(true));
   function returnToModeration() {
     if (state.busy) return;
     const next = new URL('/app', location.origin); next.searchParams.set('lang', language);
     if (state.chatId) next.searchParams.set('group', state.chatId);
+    const returnTab = currentUrl.searchParams.get('returnTab');
+    if (['overview','incidents','appeals','joins','settings','whitelist','activity','mystatus','checklink'].includes(returnTab)) next.searchParams.set('tab', returnTab);
     const theme = new URL(location.href).searchParams.get('theme');
     if (theme === 'light' || theme === 'dark') next.searchParams.set('theme', theme);
     next.hash = new URL(location.href).hash; location.replace(next.href);
   }
   $('tools-back').addEventListener('click', returnToModeration);
   $('tools-back-mobile').addEventListener('click', returnToModeration);
-  for (const node of document.querySelectorAll('[data-lang]')) node.addEventListener('click', () => { if (state.busy) return; const next = new URL(location.href); next.searchParams.set('lang', node.dataset.lang === 'sw' ? 'sw' : 'en'); next.searchParams.set('view', state.view); if (state.chatId) next.searchParams.set('group', state.chatId); location.replace(next.href); });
+  for (const node of document.querySelectorAll('[data-lang]')) node.addEventListener('click', () => { if (state.busy) return; const next = new URL(location.href); next.searchParams.set('lang', node.dataset.lang === 'sw' ? 'sw' : 'en'); next.searchParams.set('section', state.view); next.searchParams.delete('view'); if (state.chatId) next.searchParams.set('chat', state.chatId); location.replace(next.href); });
   const helpers={t,state,el,add,button,hint,card,item,field,checkbox,formCard,listCard,review,request,load,showError,timestamp,link,toast};
   const careUI=careFactory(helpers,doctorCopy),communityUI=communityFactory(helpers);
   const requested = currentUrl.searchParams.get('section') || currentUrl.searchParams.get('view'); if (Object.hasOwn(names, requested)) state.view = requested;

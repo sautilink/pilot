@@ -110,10 +110,17 @@ export function createFeatureCommands({ store, control, dispatchControl, appUrl 
     language = language === 'en' ? 'en' : 'sw';
     const t = labels[language];
     const page = (text, tab, chatId) => ({ text, reply_markup: rows(language, appUrl, tab, chatId) });
+    // Never turn a failed action into an accidental Home launch: the user can
+    // retry the originally requested task directly in the verified Mini App.
+    const targetTab = {
+      checklink:'checker',mystatus:'mycases',appeal:'mycases',
+      history:'incidents',appeals:'appeals',stats:'overview',
+      settings:'settings',whitelist:'links',alerts:'settings',report:'settings'
+    }[command] || null;
     if (command === 'dashboard') return page(t.dashboard);
     if (command === 'checklink' && !argument) return page(`${t.checkTitle}\n\n${t.checkUsage}`, 'checker');
     if (command === 'appeal' && !argument) return page(t.appealUsage, 'mycases');
-    if (!control?.query) return page(t.unavailable);
+    if (!control?.query) return page(t.unavailable, targetTab, groupId);
     const actor = { id: from.id, first_name: from.first_name, language_code: from.language_code };
 
     try {
@@ -201,7 +208,7 @@ export function createFeatureCommands({ store, control, dispatchControl, appUrl 
       }
       if (error?.code === 'appeal_exists') return page(t.appealDuplicate, 'mycases');
       if (error?.code === 'appeal_rate_limited') return page(t.appealRate, 'mycases');
-      return page(t.unavailable);
+      return page(t.unavailable, targetTab, groupId);
     }
   }
   return { render };
