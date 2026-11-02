@@ -17,6 +17,7 @@ import { createToolServices } from './tools-api.js';
 import { createToolsStore, validChat } from './tools-store.js';
 import { createSupportStore } from './support-store.js';
 import { createPerformanceService } from './performance-service.js';
+import { createWelcomeExpiries } from './welcome-expiry.js';
 
 const BROADCAST_COORDINATOR='__pilot_broadcasts__';
 async function dispatch(env,name,path,payload) {
@@ -42,6 +43,7 @@ export class GroupCoordinator extends DurableObject {
     this.tools=createToolServices({db,api:this.api,owner:this.owner});
     this.performance=createPerformanceService({db:env.DB,api:createTelegram(env.BOT_TOKEN),owner:this.owner});
     this.banExpiry=createBanExpiry({db,api:this.api});
+    this.welcomeExpiries=createWelcomeExpiries({db,api:this.api});
     this.moderator=createModerator({db,api:this.api,owner:this.owner,getIdentity,tools:this.tools,
       appUrl:`${env.PUBLIC_BASE_URL || 'https://pilot.sautilink.com'}/app`,
       dispatchControl:payload=>dispatch(env,String(payload.chatId),'/control',payload),
@@ -85,6 +87,7 @@ export class GroupCoordinator extends DurableObject {
         try {
           // Restore due temporary permissions even when interactive work is busy.
           await this.tools.governance.drain(chat);
+          await this.welcomeExpiries.drain(chat);
           // Optional sends yield before each job if an interactive request arrives.
           if(this.pendingWork<=1)await this.tools.operations.drain(chat,{limit:1,shouldYield:()=>this.pendingWork>1});
           if(this.pendingWork<=1)await this.tools.community.processSupportDeliveries(chat,{shouldYield:()=>this.pendingWork>1});
@@ -100,7 +103,7 @@ export class GroupCoordinator extends DurableObject {
   async scheduleTools(chatId,minDelay=1000) {
     const chat=validChat(chatId);
     if(this.toolsChat!==chat) {await this.ctx.storage.put('pilot_tools_chat',chat);this.toolsChat=chat;}
-    const nextTimes=await Promise.all([this.tools.operations.nextRunAt(chat),this.tools.governance.nextRunAt(chat),this.tools.community.nextSupportDue(chat)]);
+    const nextTimes=await Promise.all([this.tools.operations.nextRunAt(chat),this.tools.governance.nextRunAt(chat),this.tools.community.nextSupportDue(chat),this.welcomeExpiries.nextRunAt(chat)]);
     const now=Date.now();
     // Back off optional work, while preserving a future restoration deadline.
     // An already-overdue restoration keeps the retry backoff after a failure.
@@ -132,6 +135,13 @@ export class GroupCoordinator extends DurableObject {
         return result;
       }
       const result=await (isControl ? this.moderator.controlMutation(update) : this.moderator.handle(update,{callbackAcknowledgementStarted}));
+      const join=update.chat_member || update.message?.new_chat_members?.length&&update.message;
+      if(!isControl&&join?.chat?.id<0){
+        // Schedule optional auto-delete in the same group's Durable Object.
+        // The timer never delays core moderation if scheduling is unavailable.
+        try {await this.scheduleTools(String(join.chat.id));}
+        catch {console.warn('pilot_welcome_timer_unavailable');}
+      }
       if(!isControl&&update.message?.chat?.type==='private') {
         // Evidence comes only from a validated Telegram update. Persist it after
         // the reply path; no ordinary group message pays for private-tool setup.
@@ -167,6 +177,7 @@ export default {
         await createBroadcastStore(env.DB).cleanup(now);
         await createToolsStore(env.DB).cleanup(now);
         await createPerformanceService({db:env.DB}).cleanup(now);
+        await createWelcomeExpiries({db:env.DB,api:null}).cleanup(now);
         if(env.BOT_TOKEN){const tools=createToolServices({db:env.DB,api:createTelegram(env.BOT_TOKEN)});await tools.community.cleanup(now);await tools.operations.cleanup(now);}
       })().catch(()=>{console.error('pilot_retention_cleanup_failed');}));
     } else if(env.BOT_TOKEN) {
@@ -182,7 +193,7 @@ export default {
             await dispatch(env,String(chatId),'/ban-expiry/wake',{chatId}).catch(()=>{console.warn('pilot_ban_expiry_wake_unavailable');});
           }
           const tools=createToolServices({db:env.DB,api:createTelegram(env.BOT_TOKEN)});
-          const groups=new Set([...(await tools.operations.nextDueGroups({limit:20})),...(await tools.governance.nextDueGroups({limit:20})),...(await tools.community.dueSupportChats(20))]);
+          const groups=new Set([...(await tools.operations.nextDueGroups({limit:20})),...(await tools.governance.nextDueGroups({limit:20})),...(await tools.community.dueSupportChats(20)),...(await createWelcomeExpiries({db:env.DB,api:null}).dueGroups(20))]);
           for(const chatId of groups)await dispatch(env,String(chatId),'/tools/wake',{chatId}).catch(()=>{console.warn('pilot_tools_wake_unavailable');});
         }
       })().catch(()=>{console.error('pilot_broadcast_wake_failed');}));
