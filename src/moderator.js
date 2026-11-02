@@ -373,7 +373,7 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
           optionalAction=await guards.commandSpam(message,settings);
           if(update.message) {
             if(!optionalAction) optionalAction=await guards.flood(message,settings);
-            for(const user of message.new_chat_members || []) {await guards.welcome(message.chat.id,user,Number(message.date || clock()),settings);if(!user.is_bot)await observe({chatId:message.chat.id,userId:user.id,kind:'join',id:`${user.id}:${message.date}`,at:message.date});}
+            for(const user of message.new_chat_members || []) {await guards.welcome(message.chat.id,user,Number(message.date || clock()),settings,{messageThreadId:message.message_thread_id});if(!user.is_bot)await observe({chatId:message.chat.id,userId:user.id,kind:'join',id:`${user.id}:${message.date}`,at:message.date});}
           }
         }
         if(optionalAction) status=optionalAction;
