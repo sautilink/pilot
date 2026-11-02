@@ -87,7 +87,7 @@ export class GroupCoordinator extends DurableObject {
         try {
           // Restore due temporary permissions even when interactive work is busy.
           await this.tools.governance.drain(chat);
-          await this.welcomeExpiries.drain(chat);
+          if(this.welcomeExpiries) await this.welcomeExpiries.drain(chat);
           // Optional sends yield before each job if an interactive request arrives.
           if(this.pendingWork<=1)await this.tools.operations.drain(chat,{limit:1,shouldYield:()=>this.pendingWork>1});
           if(this.pendingWork<=1)await this.tools.community.processSupportDeliveries(chat,{shouldYield:()=>this.pendingWork>1});
@@ -103,7 +103,7 @@ export class GroupCoordinator extends DurableObject {
   async scheduleTools(chatId,minDelay=1000) {
     const chat=validChat(chatId);
     if(this.toolsChat!==chat) {await this.ctx.storage.put('pilot_tools_chat',chat);this.toolsChat=chat;}
-    const nextTimes=await Promise.all([this.tools.operations.nextRunAt(chat),this.tools.governance.nextRunAt(chat),this.tools.community.nextSupportDue(chat),this.welcomeExpiries.nextRunAt(chat)]);
+    const nextTimes=await Promise.all([this.tools.operations.nextRunAt(chat),this.tools.governance.nextRunAt(chat),this.tools.community.nextSupportDue(chat),this.welcomeExpiries?.nextRunAt(chat) ?? null]);
     const now=Date.now();
     // Back off optional work, while preserving a future restoration deadline.
     // An already-overdue restoration keeps the retry backoff after a failure.
