@@ -4,6 +4,7 @@ import { renderBotPage } from './bot-ui.js';
 import { createFeatureCommands, FEATURE_COMMANDS, ADMIN_FEATURE_COMMANDS } from './feature-commands.js';
 import { createBroadcastCommands } from './broadcast-commands.js';
 import { sendPrivateReply } from './private-replies.js';
+import { createBanExpiry } from './ban-expiry.js';
 
 const isAdmin = member => member?.status === 'creator' || member?.status === 'administrator';
 const validId = value => Number.isSafeInteger(Number(value)) && Number(value) !== 0;
@@ -132,6 +133,7 @@ function noticeSummary(notice, language) {
 
 export function createBotExperience({ db, store, api, clock = () => Math.floor(Date.now() / 1000), me, say, control, controlStore, dispatchControl, owner, dispatchBroadcast, appUrl = 'https://pilot.sautilink.com/app' }) {
   const member = (chat, user) => api.call('getChatMember', { chat_id: Number(chat), user_id: Number(user) });
+  const expiry = createBanExpiry({db,api:null,clock});
   const identity = me || (() => api.call('getMe'));
   const send = say || ((chat, text, extra = {}) => api.call('sendMessage', {
     chat_id: Number(chat), text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...extra,
@@ -242,15 +244,25 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
   async function adminPage(page, bot, from, chat, language, currentGroupLanguage) {
     const view = { ...context(bot, from, language), groupId: chat.id, groupTitle: chat.title, groupType: chat.type };
     if (page === 'status') {
-      const [group, own, notice, selectedGroupLanguage] = await Promise.all([
+      const [group, own, notice, selectedGroupLanguage, expiryState] = await Promise.all([
         store.group(chat.id), Promise.resolve().then(() => member(chat.id, bot.id)).catch(() => null),
         store.latestNotice(chat.id), currentGroupLanguage || groupLanguage(chat.id),
+        expiry.status(chat.id).catch(()=>({lastScanAt:0,pending:null})),
       ]);
       Object.assign(view, {
         moderationEnabled: !!group.enabled,
         groupLanguage: selectedGroupLanguage,
         permissionsComplete: isAdmin(own) && !!own.can_delete_messages && !!own.can_restrict_members,
         noticeSummary: noticeSummary(notice, language),
+        expirySummary: (() => {
+          const scan = expiryState.lastScanAt>0
+            ? new Date(expiryState.lastScanAt*1000).toISOString().slice(0,16).replace('T',' ')+' UTC'
+            : (language==='en' ? 'not yet recorded' : 'bado haujarekodiwa');
+          const pending = expiryState.pending===null ? '—' : String(expiryState.pending);
+          return language==='en'
+            ? `Last scheduled scan: ${scan}. Expired Pilot bans still pending: ${pending}.`
+            : `Ukaguzi wa mwisho: ${scan}. Ban za Pilot zilizopita muda na bado zinasubiri: ${pending}.`;
+        })(),
       });
     }
     return renderBotPage(page, view);
