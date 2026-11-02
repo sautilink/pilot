@@ -425,7 +425,8 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
         } else {
           const state = await store.member(choice.chat.id, argument);
           const warning = await store.linkWarning(choice.chat.id, argument);
-          await quietSend(message.chat.id, `<b>${escapeHtml(choice.chat.title || textFor(language, 'group'))}</b>\n${textFor(language, 'strikes', { user: Number(argument), strikes: state.strikes, warning: textFor(language, warning?.delivered_at ? 'warningDelivered' : warning ? 'warningPending' : 'warningDue') })}`, { reply_markup: renderBotPage('admin', { groupId: choice.chat.id, language }).reply_markup });
+          const restriction = await store.restriction(choice.chat.id,argument);
+          await quietSend(message.chat.id, `<b>${escapeHtml(choice.chat.title || textFor(language, 'group'))}</b>\n${textFor(language, 'strikes', { user: Number(argument), strikes: state.strikes, warning: textFor(language, warning?.delivered_at ? 'warningDelivered' : warning ? 'warningPending' : 'warningDue') })}\n${language==='en'?'No-post restriction stage: ':'Hatua ya restriction ya kutopost: '}${restriction.level}/5.`, { reply_markup: renderBotPage('admin', { groupId: choice.chat.id, language }).reply_markup });
         }
       } else {
         await quietSend(message.chat.id, textFor(language, 'readOnly', { command }), { reply_markup: renderBotPage('admin', { groupId: choice.chat.id, language }).reply_markup });
@@ -520,7 +521,8 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     const state = await store.member(chat, target);
     if (command === 'strikes') {
       const warning = await store.linkWarning(chat, target);
-      await privateReply(message, bot, `<b>${escapeHtml(message.chat.title || textFor(personalLanguage, 'group'))}</b>\n${textFor(personalLanguage, 'strikes', { user: Number(target), strikes: state.strikes, warning: textFor(personalLanguage, warning?.delivered_at ? 'warningDelivered' : warning ? 'warningPending' : 'warningDue') })}`, language);
+      const restriction = await store.restriction(chat,target);
+      await privateReply(message, bot, `<b>${escapeHtml(message.chat.title || textFor(personalLanguage, 'group'))}</b>\n${textFor(personalLanguage, 'strikes', { user: Number(target), strikes: state.strikes, warning: textFor(personalLanguage, warning?.delivered_at ? 'warningDelivered' : warning ? 'warningPending' : 'warningDue') })}\n${personalLanguage==='en'?'No-post restriction stage: ':'Hatua ya restriction ya kutopost: '}${restriction.level}/5.`, language);
       return true;
     }
     if (!Number.isSafeInteger(updateId)) return true;
