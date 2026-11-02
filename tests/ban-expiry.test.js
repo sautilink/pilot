@@ -46,6 +46,7 @@ test('24-hour ban is released after expiry and keeps the original strike',async 
   assert.equal(member.strikes,1);
   assert.equal((await f.db.prepare('SELECT status FROM incidents').first()).status,'confirmed');
   assert.deepEqual(await f.expiry.dueGroups(),[]);
+  assert.equal((await f.db.prepare("SELECT COUNT(*) AS n FROM pilot_health_events WHERE kind='ban_expiry_review' AND resolved_at=0").first()).n,0);
 });
 
 test('seven-day ban expires and a third permanent strike is never unbanned',async t=>{
@@ -74,6 +75,9 @@ test('manual newer bans with different dates or permanent duration are protected
   assert.equal(result.unbanned,0);
   assert.equal(f.calls.filter(c=>c.method==='unbanChatMember').length,0);
   assert.ok((await f.store.member(GROUP,101)).active_until>0);
+  const health=await f.db.prepare("SELECT kind,resolved_at FROM pilot_health_events WHERE chat_id=? AND kind='ban_expiry_review'").bind(String(GROUP)).first();
+  assert.equal(health.kind,'ban_expiry_review');
+  assert.equal(health.resolved_at,0);
 });
 
 test('already unbanned user is reconciled without removing an existing member',async t=>{
@@ -95,6 +99,8 @@ test('failed unban is retried on the next sweep',async t=>{
   assert.ok((await f.store.member(GROUP,101)).active_until>0);
   f.errors.delete('unbanChatMember');
   assert.equal((await f.expiry.expireGroup(GROUP)).unbanned,1);
+  const resolved=await f.db.prepare("SELECT resolved_at FROM pilot_health_events WHERE chat_id=? AND kind='ban_expiry_review'").bind(String(GROUP)).first();
+  assert.equal(resolved.resolved_at,f.now());
 });
 
 test('admin overrides cancelled incidents and permanent bans are excluded',async t=>{
@@ -124,4 +130,17 @@ test('rotating cursors check all groups and members without starvation',async t=
     for(const call of f.calls.slice(start)) if(call.method==='unbanChatMember') users.add(call.params.user_id);
   }
   assert.deepEqual(users,new Set([101,102,103]));
+});
+
+test('failed Telegram membership read raises a temporary-ban health alert',async t=>{
+  const f=await fixture(t);
+  await f.ban(101);
+  f.advance(86402);
+  f.errors.add('getChatMember');
+  assert.equal((await f.expiry.expireGroup(GROUP)).failed,1);
+  assert.equal((await f.db.prepare("SELECT resolved_at FROM pilot_health_events WHERE kind='ban_expiry_review'").first()).resolved_at,0);
+  assert.equal(f.calls.filter(c=>c.method==='unbanChatMember').length,0);
+  f.errors.delete('getChatMember');
+  assert.equal((await f.expiry.expireGroup(GROUP)).unbanned,1);
+  assert.equal((await f.db.prepare("SELECT resolved_at FROM pilot_health_events WHERE kind='ban_expiry_review'").first()).resolved_at,f.now());
 });
