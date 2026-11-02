@@ -13,7 +13,7 @@ test('warnings tag the member safely in both languages and every notice style',(
     const notice=formatAnnouncement(row,message,false,language,{notice_template,notice_en:'custom ban',notice_sw:'custom ban'});
     assert.match(notice.rich,/<a href="tg:\/\/user\?id=101">😀 &lt;Juma &amp; Asha&gt;<\/a>/);
     assert.doesNotMatch(notice.rich,/MEMBER BANNED|MEMBER AMEFUNGIWA|Ends:|Mwisho:|0 \/ 3|custom ban/);
-    assert.match(notice.plain,language==='en' ? /If you post a prohibited link again, you will be banned/ : /Links zinazofuata huleta restrictions za kutopost/);
+    assert.match(notice.plain,language==='en' ? /Further prohibited links lead to no-post restrictions/ : /Links zinazofuata huleta restrictions za kutopost/);
     const [entity]=notice.plainEntities;
     assert.equal(notice.plain.slice(entity.offset,entity.offset+entity.length),message.from.first_name);
     assert.equal(entity.user.id,101); assert.equal(entity.type,'text_mention');
