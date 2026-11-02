@@ -118,7 +118,7 @@ export function createStore(db) {
       const changes=await db.batch([
         db.prepare(`INSERT INTO member_restrictions(chat_id,user_id,level,until_date,episode_at,incident_id)
           SELECT chat_id,user_id,?,?,event_at,id FROM incidents
-          WHERE id=? AND strike=? AND status='restriction_sent'
+          WHERE id=? AND strike=? AND status IN ('restriction_sent','restriction_uncertain')
           AND EXISTS(SELECT 1 FROM members m WHERE m.chat_id=incidents.chat_id
             AND m.user_id=incidents.user_id AND m.override_at<incidents.event_at)
           ON CONFLICT(chat_id,user_id) DO UPDATE SET
@@ -126,7 +126,7 @@ export function createStore(db) {
           until_date=excluded.until_date,episode_at=excluded.episode_at,
           incident_id=excluded.incident_id
           WHERE excluded.level>=member_restrictions.level`).bind(level,row.until_date,row.id,row.strike),
-        db.prepare(`UPDATE incidents SET status='restricted' WHERE id=? AND status='restriction_sent'
+        db.prepare(`UPDATE incidents SET status='restricted' WHERE id=? AND status IN ('restriction_sent','restriction_uncertain')
           AND EXISTS(SELECT 1 FROM member_restrictions r WHERE r.chat_id=incidents.chat_id
             AND r.user_id=incidents.user_id AND r.incident_id=incidents.id)`).bind(row.id),
         db.prepare('SELECT * FROM incidents WHERE id=?').bind(row.id)
