@@ -160,6 +160,20 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     const name = /^[A-Za-z0-9_]{5,32}$/.test(bot.username || '') ? bot.username : 'sautilinkpilotbot';
     return `https://t.me/${name}?start=${chat == null ? 'home' : `manage_${chat}`}`;
   };
+  const featureLink = (bot, command, chat = null) => {
+    const username = /^[A-Za-z0-9_]{5,32}$/.test(bot.username || '') ? bot.username : 'sautilinkpilotbot';
+    const context = chat != null && /^-[1-9]\\d{0,15}$/.test(String(chat)) ? `_${chat}` : '';
+    return `https://t.me/${username}?start=feature_${command}${context}`;
+  };
+  async function featurePointer(message, bot, language, command, chat = null) {
+    // The group receives only a private-entry link. The bot rechecks the real
+    // user on /start and does not trust any group ID from the deep link.
+    if (anonymous(message) || message.sender_chat) return pointer(message, bot, language, true);
+    return quietSend(message.chat.id, textFor(language, chat == null ? 'publicPointer' : 'panelPointer'),
+      { reply_markup: { inline_keyboard: [[{
+        text: textFor(language, 'openPilot'), url: featureLink(bot, command, chat)
+      }]] } });
+  }
   const panelMarkup = (bot, chat, language) => ({ inline_keyboard: [[{ text: textFor(language, 'openPanel'), url: link(bot, chat) }]] });
   const homeMarkup = (bot, language) => renderBotPage('help', context(bot, null, language)).reply_markup;
 
@@ -299,6 +313,26 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     if (match[2] && match[2].toLowerCase() !== String(bot.username).toLowerCase()) return true;
     let language = initialLanguage;
 
+    const deepFeature = command === 'start' && message.chat.type === 'private' && peer(message)
+      ? /^feature_(dashboard|checklink|mystatus|appeal|history|appeals|settings|stats|alerts|report|whitelist)(?:_(-[1-9]\\d{0,15}))?$/.exec(argument || '')
+      : null;
+    if (deepFeature) {
+      const requested = deepFeature[1], requestedChat = deepFeature[2];
+      if (ADMIN_FEATURE_COMMANDS.has(requested)) {
+        const chosen = requestedChat ? await verifySelected(message.from.id,requestedChat) : null;
+        if (!chosen?.chat) {
+          await sendPage(message,unavailablePage(bot,message.from,language,chosen?.unavailable));
+          return true;
+        }
+        await store.setAdminContext(message.from.id, chosen.chat.id, clock());
+      }
+      await sendPage(message,await features.render({
+        command:requested,from:message.from,language,updateId,
+        ...(requestedChat ? {groupId:requestedChat} : {})
+      }));
+      return true;
+    }
+
     const featureCommand = FEATURE_COMMANDS.has(command) ? command
       : command === 'start' && ['dashboard', 'checklink', 'mystatus', 'appeal'].includes(argument) ? argument : null;
     if (featureCommand) {
@@ -311,12 +345,12 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
             if(!anonymous(message)&&Number.isSafeInteger(message.ephemeral_message_id)) {
               const view=await features.render({command:featureCommand,argument:argument||'',from:message.from,language,updateId,groupId:message.chat.id});
               await privateReply(message,bot,view.text,language,{reply_markup:view.reply_markup});
-            } else await pointer(message, bot, language, true);
+            } else await featurePointer(message, bot, language, featureCommand, message.chat.id);
           } else await quietSend(message.chat.id, textFor(language, 'denied'));
         } else if(!message.sender_chat&&userId(message.from?.id)&&Number.isSafeInteger(message.ephemeral_message_id)) {
           const view=await features.render({command:featureCommand,argument:argument||'',from:message.from,language,updateId,groupId:message.chat.id});
           await privateReply(message,bot,view.text,language,{reply_markup:view.reply_markup});
-        } else await pointer(message, bot, language);
+        } else await featurePointer(message, bot, language, featureCommand);
       }
       return true;
     }
