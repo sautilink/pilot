@@ -840,8 +840,12 @@ test('old confirmed strikes remain intact after rollout while their first new li
   assert.equal((await store.member(GROUP,USER_ID)).last_incident,'legacy-ban');
   f.advance(2);
   await f.moderator.handle(f.message());
-  assert.equal(f.api.callsOf('banChatMember').length,1);
-  assert.equal(f.api.callsOf('banChatMember')[0].params.until_date,f.now()+7*86400);
+  assert.equal(f.api.callsOf('banChatMember').length,0);
+  assert.equal(f.api.callsOf('restrictChatMember').length,1);
+  assert.equal(f.api.callsOf('restrictChatMember')[0].params.until_date,f.now()+3600);
+  assert.equal((await store.restriction(GROUP,USER_ID)).level,1);
+  assert.equal((await store.member(GROUP,USER_ID)).strikes,1);
+  assert.equal((await store.member(GROUP,USER_ID)).last_incident,'legacy-ban');
 });
 
 
