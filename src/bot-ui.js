@@ -1,6 +1,6 @@
 import { escapeHtml } from './policy.js';
 
-export const EXPERIENCE_VERSION = '2026-10-22.5';
+export const EXPERIENCE_VERSION = '2026-11-02.1';
 export const BOT_DESCRIPTION = 'SautiLink Pilot husaidia kusimamia Telegram groups kwa sheria wazi, moderation ya links na forwards, na matangazo yenye sababu. Kagua link, ona matukio yako au tuma rufaa. Shiriki events, chagua vikumbusho na omba msaada wa admins faraghani ikiwa group limeruhusu. Admin ana paneli yake ya mipangilio na zana. Kiswahili / English.';
 export const BOT_SHORT_DESCRIPTION = 'Moderation, events, msaada wa faragha na zana za admins. Kiswahili / English.';
 
