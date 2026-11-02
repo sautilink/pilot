@@ -9,6 +9,19 @@ const validChat = chat => Number.isSafeInteger(Number(chat)) && Number(chat) < 0
 const validUser = user => Number.isSafeInteger(Number(user)) && Number(user) > 0;
 const notBanned = new Set(['left', 'member', 'restricted', 'administrator', 'creator']);
 
+// Only a fixed, non-sensitive category goes into an admin's private response.
+// Never include Telegram's raw error string, URLs, tokens or provider payloads.
+// Failure to identify a user is NOT proof that the user is unbanned.
+export function classifyBanLookupFailure(error) {
+  const code = Number(error?.code || 0);
+  const description = typeof error?.message === 'string' ? error.message.slice(0,256).toLowerCase() : '';
+  if (code === 429) return 'rate_limited';
+  if (code === 400 && /(?:user|member) not found|(?:user|participant)(?:_id)?_invalid|participant_id_invalid/.test(description)) return 'user_unavailable';
+  if (code === 403 || /(?:not enough rights|chat_admin_required|bot is not a member|bot was kicked)/.test(description)) return 'permission';
+  if (code === 0 || code >= 500 || error?.ambiguous === true) return 'telegram_unavailable';
+  return 'unknown';
+}
+
 export function createBanRoster({db, api, clock = () => Math.floor(Date.now() / 1000)}) {
   async function list(chatId, page = 1) {
     if (!validChat(chatId) || !Number.isSafeInteger(page) || page < 1 || page > MAX_PAGE) return {invalid:true};
@@ -33,8 +46,8 @@ export function createBanRoster({db, api, clock = () => Math.floor(Date.now() / 
         let member;
         try {
           member = await api.call('getChatMember',{chat_id:Number(chatId),user_id:userId});
-        } catch {
-          return {kind:'unknown',userId,until:Number(row.active_until)};
+        } catch (error) {
+          return {kind:'unknown',userId,until:Number(row.active_until),reason:classifyBanLookupFailure(error)};
         }
         if (member?.status === 'kicked') {
           const until = Number(member.until_date);
@@ -53,7 +66,7 @@ export function createBanRoster({db, api, clock = () => Math.floor(Date.now() / 
         if (result.kind === 'banned') {
           const {kind,...row} = result; visible.push(row);
         } else if (result.kind === 'unknown') {
-          if (validUser(result.userId)) unverified.push({userId:result.userId,until:result.until});
+          if (validUser(result.userId)) unverified.push({userId:result.userId,until:result.until,reason:result.reason || 'unknown'});
         } else released++;
       }
     }
@@ -90,13 +103,20 @@ export function formatBanRoster(result,{language='sw',groupTitle=''}={}) {
   }
   if (unknown.length) {
     lines.push('',en?'<b>Could not verify in Telegram (NOT confirmed banned):</b>':'<b>Haijathibitishwa Telegram (SIYO ban iliyothibitishwa):</b>');
+    const reasonLabel = {
+      user_unavailable: en?'Telegram could not resolve user identity':'Telegram imeshindwa kutambua user',
+      permission: en?'Telegram permission/access error':'Hitilafu ya ruhusa za Telegram',
+      rate_limited: en?'Telegram rate limit':'Kikomo cha maombi ya Telegram',
+      telegram_unavailable: en?'Telegram temporarily unavailable':'Telegram haipatikani kwa sasa',
+      unknown: en?'Telegram status unknown':'Hali ya Telegram haijulikani',
+    };
     for(const row of unknown) {
       const stored = row.until===-1 ? (en?'Pilot record: permanent':'Rekodi ya Pilot: kudumu')
         : row.until>0 ? (en?'Pilot record until':'Rekodi ya Pilot hadi')+' '+new Date(row.until*1000).toISOString().slice(0,16).replace('T',' ')+' UTC'
         : (en?'Pilot record':'Rekodi ya Pilot');
-      lines.push(`• <code>${row.userId}</code> — ${stored}`);
+      lines.push(`• <code>${row.userId}</code> — ${stored} · ${reasonLabel[row.reason] || reasonLabel.unknown}`);
     }
-    lines.push(en?'Telegram could not confirm these users. Check bot permissions or retry /bans; do not assume the ban is active or removed.':'Telegram haikuweza kuthibitisha users hawa. Kagua ruhusa za bot au rudia /bans; usidhani ban ipo au imeondoka.');
+    lines.push(en?'The category is diagnostic, NOT proof of an active/removed ban. For unresolved user identity, the member may try starting @sautilinkpilotbot privately; otherwise check bot permissions or retry /bans.':'Aina ya hitilafu SI uthibitisho wa ban kuwepo/kuondoka. Kama user hatambuliki, anaweza kuanzisha @sautilinkpilotbot faraghani; vinginevyo kagua ruhusa za bot au rudia /bans.');
   } else if (unavailable) {
     lines.push('',en?`${unavailable} membership checks could not be verified.`:`Hali za members ${unavailable} hazikuweza kuthibitishwa.`);
   }
