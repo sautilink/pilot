@@ -6,6 +6,7 @@ import { createBroadcastCommands } from './broadcast-commands.js';
 import { sendPrivateReply } from './private-replies.js';
 import { createBanExpiry } from './ban-expiry.js';
 import { createBanRoster, formatBanRoster, formatBanCheck } from './ban-roster.js';
+import { classifyUnbanFailure, formatUnbanFailure } from './unban-feedback.js';
 
 const isAdmin = member => member?.status === 'creator' || member?.status === 'administrator';
 const validId = value => Number.isSafeInteger(Number(value)) && Number(value) !== 0;
@@ -528,11 +529,17 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
       await store.done(updateId, clock());
       try {
         const result = await api.call('unbanChatMember', { chat_id: chat, user_id: Number(target), only_if_banned: true });
-        if (result !== true) throw new Error('Unconfirmed unban');
+        if (result !== true) throw Object.assign(new Error('Unconfirmed Telegram result'), {code:'result_unconfirmed'});
       }
-      catch {
-        await audit(message, updateId, 'member_unban_unknown', target);
-        await privateReply(message, bot, textFor(personalLanguage, 'unbanUnknown'), language);
+      catch (error) {
+        // Telegram may reject a user ID it no longer resolves, or a network
+        // timeout may lose a successful response. Neither justifies an
+        // automatic retry or changing the authoritative ban history in D1.
+        const reason=classifyUnbanFailure(error);
+        await audit(message, updateId, 'member_unban_unknown', target, {reason});
+        await privateReply(message, bot, formatUnbanFailure(error,{
+          language:personalLanguage,userId:target,groupTitle:message.chat.title
+        }), language);
         return true;
       }
       await store.override(chat, target, clock(), false);
