@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TestD1 } from './helpers/d1.js';
 import { applySchema,createStore } from '../src/store.js';
-import { createBanRoster,formatBanRoster,classifyBanLookupFailure } from '../src/ban-roster.js';
+import { createBanRoster,formatBanRoster,formatBanCheck,classifyBanLookupFailure } from '../src/ban-roster.js';
 
 const CHAT=-1001001,NOW=1800000000;
 async function setup(t){
@@ -173,4 +173,51 @@ test('unverified users show safe reasons and never leak raw Telegram error',asyn
   assert.match(sw,/Kikomo cha maombi ya Telegram/);
   assert.equal((await f.store.member(CHAT,101)).active_until,NOW+86400);
   assert.equal((await f.store.member(CHAT,102)).active_until,NOW+86400);
+});
+
+test('single-ID diagnostic confirms current Telegram ban and preserves history',async t=>{
+  const f=await setup(t);
+  await f.add(101,{until:NOW-86400});
+  const before=await f.store.member(CHAT,101);
+  const status=await f.roster.inspect(CHAT,101);
+  assert.equal(status.known,true);
+  assert.equal(status.pilotUntil,NOW-86400);
+  assert.equal(status.telegram.kind,'banned');
+  assert.equal(status.telegram.expired,true);
+  const sw=formatBanCheck(status,{language:'sw',groupTitle:'<Group & Hub>'});
+  assert.match(sw,/muda kuisha/i);
+  assert.match(sw,/&lt;Group &amp; Hub&gt;/);
+  assert.match(sw,/\/unban USER_ID/);
+  assert.deepEqual(await f.store.member(CHAT,101),before);
+  assert.equal(f.calls.filter(x=>x.method==='unbanChatMember').length,0);
+});
+test('diagnostic differentiates Telegram released state, later manual ban, and unknown API state',async t=>{
+  const f=await setup(t);
+  await f.add(101);
+  f.users.set(101,{status:'left'});
+  assert.match(formatBanCheck(await f.roster.inspect(CHAT,101),{language:'en'}),/NOT BANNED/);
+  f.users.set(101,{status:'kicked',until_date:0});
+  const changed=await f.roster.inspect(CHAT,101);
+  assert.equal(changed.telegram.matchesPilot,false);
+  assert.match(formatBanCheck(changed,{language:'en'}),/Another administrator may have changed it/);
+  const broken=createBanRoster({db:f.db,clock:()=>NOW,api:{
+    call:async()=>{throw {code:400,message:'Bad Request: user not found BOT_TOKEN private_secret'};}
+  }});
+  const status=await broken.inspect(CHAT,101);
+  assert.equal(status.telegram.reason,'user_unavailable');
+  const en=formatBanCheck(status,{language:'en'});
+  assert.match(en,/UNVERIFIED/);
+  assert.match(en,/Telegram could not resolve this user/);
+  assert.doesNotMatch(en,/BOT_TOKEN|private_secret|Bad Request/);
+  assert.ok((await f.store.member(CHAT,101)).active_until>0);
+});
+test('diagnostic never queries arbitrary unknown ID or writes new member state',async t=>{
+  const f=await setup(t);
+  const initial=f.calls.length;
+  const unknown=await f.roster.inspect(CHAT,999);
+  assert.equal(unknown.known,false);
+  assert.match(formatBanCheck(unknown,{language:'en'}),/no moderation case/);
+  assert.equal(f.calls.length,initial);
+  assert.equal(await f.db.prepare('SELECT 1 FROM members WHERE chat_id=? AND user_id=?').bind(String(CHAT),'999').first(),null);
+  assert.equal((await f.roster.inspect(CHAT,'invalid')).invalid,true);
 });

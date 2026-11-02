@@ -76,7 +76,44 @@ export function createBanRoster({db, api, clock = () => Math.floor(Date.now() / 
       more:(stored.results || []).length>PAGE_SIZE
     };
   }
-  return {list};
+  // An explicit single-ID check complements the paginated list. Do not
+  // invent members in D1 or probe arbitrary unrelated Telegram identities.
+  async function inspect(chatId,userId) {
+    if (!validChat(chatId) || !validUser(userId)) return {invalid:true};
+    const id=String(userId);
+    const member=await db.prepare(`SELECT m.strikes,m.active_until,m.override_at,
+      m.last_incident,i.status AS incident_status,i.until_date AS incident_until
+      FROM members m LEFT JOIN incidents i ON i.id=m.last_incident
+      WHERE m.chat_id=? AND m.user_id=? LIMIT 1`)
+      .bind(String(chatId),id).first();
+    if (!member || !member.last_incident) return {invalid:false,known:false,userId:Number(id)};
+    const result={
+      invalid:false,known:true,userId:Number(id),
+      strikes:Number(member.strikes||0),
+      pilotUntil:Number(member.active_until||0),
+      incidentUntil:Number(member.incident_until||0),
+      incidentStatus:['confirmed','cancelled','failed','pending','planned','review'].includes(member.incident_status)
+        ? member.incident_status : 'unknown',
+      overrideAt:Number(member.override_at||0)
+    };
+    try {
+      const live=await api.call('getChatMember',{chat_id:Number(chatId),user_id:Number(id)});
+      if (live?.status==='kicked') {
+        const until=Number(live.until_date);
+        if (!Number.isSafeInteger(until) || until<0) throw new Error('Malformed Telegram status');
+        result.telegram={kind:'banned',until,
+          matchesPilot:(result.pilotUntil===-1?until===0:until===result.pilotUntil),
+          expired:until>0 && until<=clock()};
+      } else if (notBanned.has(live?.status)) result.telegram={
+        kind:'not_banned',status:live.status
+      };
+      else result.telegram={kind:'unknown',reason:'unknown'};
+    } catch(error) {
+      result.telegram={kind:'unknown',reason:classifyBanLookupFailure(error)};
+    }
+    return result;
+  }
+  return {list,inspect};
 }
 
 export function formatBanRoster(result,{language='sw',groupTitle=''}={}) {
@@ -123,5 +160,59 @@ export function formatBanRoster(result,{language='sw',groupTitle=''}={}) {
   lines.push('',en?'Remove a ban in the group: <code>/unban USER_ID</code>':'Ondoa ban ndani ya group: <code>/unban USER_ID</code>');
   if(result.more) lines.push(en?`Next page: <code>/bans ${result.page+1}</code>`:`Ukurasa unaofuata: <code>/bans ${result.page+1}</code>`);
   lines.push('',en?'Telegram has no full ban-list API; only Pilot-recorded IDs were checked.':'Telegram haina API ya orodha kamili ya ban; tumekagua ID zilizorekodiwa na Pilot tu.');
+  return lines.join('\n');
+}
+
+const when = (seconds,language) => {
+  const value=Number(seconds);
+  if (!Number.isSafeInteger(value) || value<=0 || value>253402300799) return '—';
+  return new Date(value*1000).toISOString().slice(0,16).replace('T',' ')+' UTC';
+};
+
+export function formatBanCheck(result,{language='sw',groupTitle=''}={}) {
+  const en=language==='en';
+  if(result.invalid) return en?'Use <code>/bancheck USER_ID</code> with a numeric Telegram ID.':'Tumia <code>/bancheck USER_ID</code> na ID ya namba ya Telegram.';
+  const lines=[
+    en?'<b>🛡 Pilot · Single-member ban check</b>':'<b>🛡 Pilot · Ukaguzi wa ban ya member</b>',
+    '<b>'+escapeHtml(String(groupTitle).slice(0,100))+'</b>',
+    (en?'User':'Mtumiaji')+': <code>'+result.userId+'</code>'
+  ];
+  if(!result.known){
+    lines.push('',en?'Pilot has no moderation case for this ID in the selected group. Telegram was not queried.':'Pilot haina rekodi ya adhabu kwa ID hii kwenye group hili. Telegram haijaulizwa.');
+    return lines.join('\n');
+  }
+  const pilot=result.pilotUntil;
+  const recorded=pilot===-1?(en?'Permanent':'Kudumu'):
+    pilot===0?(en?'No active ban recorded':'Hakuna ban active iliyorekodiwa'):
+    when(pilot,language);
+  lines.push(
+    '',(en?'Pilot recorded ban':'Ban iliyorekodiwa na Pilot')+': '+recorded,
+    (en?'Strike history':'Historia ya makosa')+': '+result.strikes+'/3',
+    (en?'Last incident status':'Hali ya tukio la mwisho')+': '+result.incidentStatus
+  );
+  const telegram=result.telegram||{kind:'unknown',reason:'unknown'};
+  if(telegram.kind==='banned'){
+    const actual=telegram.until===0?(en?'Permanent':'Kudumu'):when(telegram.until,language);
+    lines.push('',en?'<b>Telegram: BANNED</b>':'<b>Telegram: BANNED</b>',actual);
+    if(telegram.expired) lines.push(en?'Telegram still reports a ban after the deadline.':'Telegram bado inaonyesha ban hata baada ya muda kuisha.');
+    if(!telegram.matchesPilot) lines.push(en?'Telegram duration differs from Pilot. Another administrator may have changed it; review before unbanning.':'Muda wa Telegram unatofautiana na rekodi ya Pilot. Huenda admin mwingine alibadilisha; kagua kabla ya kuondoa ban.');
+    lines.push(en?'An administrator can decide to use <code>/unban USER_ID</code> in the group.':'Admin anaweza kuamua kutumia <code>/unban USER_ID</code> ndani ya group.');
+  } else if(telegram.kind==='not_banned'){
+    const status=['left','member','restricted','administrator','creator'].includes(telegram.status)?telegram.status:'unknown';
+    lines.push('',en?'<b>Telegram: NOT BANNED</b>':'<b>Telegram: HAJABANIWA</b>',(en?'Membership status: ':'Hali ya uanachama: ')+status);
+    lines.push(en?'If they still cannot join, check invite links, join requests and any remaining restrictions.':'Akiendelea kushindwa kujiunga, kagua invite links, join requests na restrictions nyingine.');
+  } else {
+    const reasonNames={
+      user_unavailable:en?'Telegram could not resolve this user':'Telegram haijamtambua user',
+      permission:en?'Bot lacks access or required permissions':'Bot haina access au ruhusa zinazohitajika',
+      rate_limited:en?'Telegram rate limit':'Telegram rate limit',
+      telegram_unavailable:en?'Telegram temporarily unavailable':'Telegram haipatikani kwa sasa',
+      unknown:en?'Could not determine Telegram status':'Hali ya Telegram haijathibitishwa'
+    };
+    lines.push('',en?'<b>Telegram: UNVERIFIED</b>':'<b>Telegram: HAIJATHIBITISHWA</b>',reasonNames[telegram.reason]||reasonNames.unknown);
+    lines.push(en?'This is not proof of a current ban. Do not reset the record automatically.':'Huu si uthibitisho kuwa ban ipo. Usisafishe rekodi kwa makisio.');
+    lines.push(en?'Recheck bot admin rights, retry this check, or ask the member to start @sautilinkpilotbot privately. An admin can separately decide to use /unban in the group.':'Kagua ruhusa za bot, rudia ukaguzi, au muombe member aanzishe @sautilinkpilotbot faraghani. Admin anaweza kuamua tofauti kutumia /unban ndani ya group.');
+  }
+  lines.push('',en?'Read-only diagnostic. No bans or strikes were changed.':'Huu ni ukaguzi tu. Hakuna ban au makosa yaliyobadilishwa.');
   return lines.join('\n');
 }

@@ -5,14 +5,14 @@ import { createFeatureCommands, FEATURE_COMMANDS, ADMIN_FEATURE_COMMANDS } from 
 import { createBroadcastCommands } from './broadcast-commands.js';
 import { sendPrivateReply } from './private-replies.js';
 import { createBanExpiry } from './ban-expiry.js';
-import { createBanRoster, formatBanRoster } from './ban-roster.js';
+import { createBanRoster, formatBanRoster, formatBanCheck } from './ban-roster.js';
 
 const isAdmin = member => member?.status === 'creator' || member?.status === 'administrator';
 const validId = value => Number.isSafeInteger(Number(value)) && Number(value) !== 0;
 const userId = value => validId(value) && Number(value) > 0;
 const groupId = value => /^-[1-9]\d*$/.test(String(value)) && validId(value);
 const isGroup = chat => ['group', 'supergroup'].includes(chat?.type);
-const commandPattern = /^\/(start|help|pilot|about|howitworks|rules|connect|developer|admin|status|bans|strikes|forgive|unban|pause|resume|testnotice|language|dashboard|checklink|mystatus|appeal|history|appeals|settings|stats|alerts|report|whitelist)(?:@([A-Za-z0-9_]+))?(?:\s+([\s\S]*))?$/i;
+const commandPattern = /^\/(start|help|pilot|about|howitworks|rules|connect|developer|admin|status|bans|bancheck|strikes|forgive|unban|pause|resume|testnotice|language|dashboard|checklink|mystatus|appeal|history|appeals|settings|stats|alerts|report|whitelist)(?:@([A-Za-z0-9_]+))?(?:\s+([\s\S]*))?$/i;
 const pages = { start: 'home', pilot: 'home', help: 'help', about: 'about', howitworks: 'how', rules: 'rules', connect: 'connect', developer: 'developer', language: 'language' };
 const publicStartPages = new Set(['home', 'about', 'how', 'rules', 'connect', 'developer', 'help', 'language']);
 const callbackPages = new Set(['home', 'about', 'how', 'rules', 'connect', 'developer', 'help', 'admin', 'status', 'language', ...FEATURE_COMMANDS]);
@@ -32,6 +32,7 @@ const copy = {
     deniedPanel: 'Paneli hii inapatikana kwa owner au admin wa group husika. Fungua group unalosimamia na utume /admin.',
     denied: 'Ombi hili linapatikana kwa wasimamizi wa group hili.',
     strikesUsage: 'Tumia <code>/strikes USER_ID</code> kwa ID ya mtumiaji katika group ulilochagua.',
+    bancheckUsage: 'Tumia <code>/bancheck USER_ID</code> kupata hali ya member mmoja bila kubadilisha ban.',
     strikes: 'Mtumiaji <code>{user}</code>: makosa {strikes} kati ya 3 katika group hili.',
     group: 'Group lako',
     readOnly: 'Tuma /{command} ndani ya group unalosimamia. Amri hii hutekelezwa kwenye group lenyewe; majibu yake ya kina yatakuja hapa. Fungua /dashboard kwa mipangilio na ukaguzi wa matukio.',
@@ -56,6 +57,7 @@ const copy = {
     deniedPanel: 'This panel is available to the relevant group’s owner or admins. Open a group you manage and send /admin.',
     denied: 'This request is available to this group’s admins.',
     strikesUsage: 'Use <code>/strikes USER_ID</code> for a member of the group you selected.',
+    bancheckUsage: 'Use <code>/bancheck USER_ID</code> to inspect one member without changing their ban.',
     strikes: 'Member <code>{user}</code>: {strikes} of 3 strikes in this group.',
     group: 'Your group',
     readOnly: 'Send /{command} inside the group you manage. This command runs in the group itself; detailed replies are delivered here. Open /dashboard for settings and case reviews.',
@@ -403,6 +405,13 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
         const page=argument===undefined || argument==='' ? 1 : /^\d{1,4}$/.test(argument) ? Number(argument) : 0;
         const result=await banRoster.list(choice.chat.id,page);
         await quietSend(message.chat.id,formatBanRoster(result,{language,groupTitle:choice.chat.title}));
+      } else if (command === 'bancheck') {
+        if (!/^\d+$/.test(argument || '') || !userId(argument)) {
+          await quietSend(message.chat.id,textFor(language,'bancheckUsage'));
+        } else {
+          const result=await banRoster.inspect(choice.chat.id,argument);
+          await quietSend(message.chat.id,formatBanCheck(result,{language,groupTitle:choice.chat.title}));
+        }
       } else if (command === 'strikes') {
         if (!/^\d+$/.test(argument || '') || !userId(argument)) {
           await quietSend(message.chat.id, textFor(language, 'strikesUsage'), { reply_markup: renderBotPage('admin', { groupId: choice.chat.id, language }).reply_markup });
@@ -442,6 +451,18 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
       const result=await banRoster.list(chat,page);
       await store.setAdminContext(message.from.id,chat,clock());
       await privateReply(message,bot,formatBanRoster(result,{language:personalLanguage,groupTitle:message.chat.title}),language);
+      return true;
+    }
+    if (command === 'bancheck') {
+      if (anonymous(message)) { await pointer(message, bot, language, true); return true; }
+      const target=argument || (!message.reply_to_message?.sender_chat && message.reply_to_message?.from?.id);
+      if (!/^\d+$/.test(String(target || '')) || !userId(target)) {
+        await privateReply(message,bot,textFor(personalLanguage,'bancheckUsage'),language);
+        return true;
+      }
+      const result=await banRoster.inspect(chat,target);
+      await store.setAdminContext(message.from.id,chat,clock());
+      await privateReply(message,bot,formatBanCheck(result,{language:personalLanguage,groupTitle:message.chat.title}),language);
       return true;
     }
     if (command === 'status') {
