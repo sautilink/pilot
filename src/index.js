@@ -3,6 +3,7 @@ import { handleFetch } from './handler.js';
 import { createModerator } from './moderator.js';
 import { createTelegram } from './telegram.js';
 import { createStore } from './store.js';
+import { createBanExpiry } from './ban-expiry.js';
 import { createControlStore } from './control-store.js';
 import { createGuardrailStore } from './guardrail-store.js';
 import { runMonitoring } from './monitoring.js';
@@ -40,6 +41,7 @@ export class GroupCoordinator extends DurableObject {
     this.broadcasts=createBroadcastService({db,api:this.api,owner:this.owner});
     this.tools=createToolServices({db,api:this.api,owner:this.owner});
     this.performance=createPerformanceService({db:env.DB,api:createTelegram(env.BOT_TOKEN),owner:this.owner});
+    this.banExpiry=createBanExpiry({db,api:this.api});
     this.moderator=createModerator({db,api:this.api,owner:this.owner,getIdentity,tools:this.tools,
       appUrl:`${env.PUBLIC_BASE_URL || 'https://pilot.sautilink.com'}/app`,
       dispatchControl:payload=>dispatch(env,String(payload.chatId),'/control',payload),
@@ -112,13 +114,14 @@ export class GroupCoordinator extends DurableObject {
     const update=await request.json();
     const path=new URL(request.url).pathname;
     const isControl=path==='/control',isBroadcast=path==='/broadcast',isWake=path==='/broadcast/wake';
-    const isTools=path==='/tools',isToolsWake=path==='/tools/wake',isIntegration=path==='/integration';
-    if(!['/telegram','/control','/broadcast','/broadcast/wake','/tools','/tools/wake','/integration'].includes(path))return Response.json({ok:false,error:'not_found'},{status:404});
+    const isTools=path==='/tools',isToolsWake=path==='/tools/wake',isIntegration=path==='/integration',isBanExpiry=path==='/ban-expiry/wake';
+    if(!['/telegram','/control','/broadcast','/broadcast/wake','/tools','/tools/wake','/integration','/ban-expiry/wake'].includes(path))return Response.json({ok:false,error:'not_found'},{status:404});
     // A Durable Object is single-threaded but awaits interleave; the explicit queue
     // keeps Telegram actions and D1 writes for a chat in one serial decision stream.
     const callbackAcknowledgementStarted=path==='/telegram' && request.headers.get('X-Pilot-Callback-Acknowledgement')==='started';
-    const route=isTools?'tools':isToolsWake?'tools_wake':isIntegration?'integration':isControl ? 'control' : isBroadcast ? 'broadcast' : isWake ? 'broadcast_wake' : 'telegram';
+    const route=isBanExpiry?'ban_expiry':isTools?'tools':isToolsWake?'tools_wake':isIntegration?'integration':isControl ? 'control' : isBroadcast ? 'broadcast' : isWake ? 'broadcast_wake' : 'telegram';
     const task=this.queued(route,async()=>{
+      if(isBanExpiry)return this.banExpiry.expireGroup(update.chatId);
       if(isToolsWake){await this.scheduleTools(update.chatId);return {ok:true};}
       if(isTools){try{return await this.tools.perform(update);}finally{if(update.chatId&&!['feedback_create','feedback_resolve'].includes(update.action))await this.scheduleTools(update.chatId);}}
       if(isIntegration)return this.tools.integration.perform(update);
@@ -141,7 +144,7 @@ export class GroupCoordinator extends DurableObject {
       return Response.json(result,{status:result.retry ? 503 : 200});
     }
     catch(error) {
-      if(isControl || isBroadcast || isWake || isTools || isToolsWake || isIntegration) {
+      if(isControl || isBroadcast || isWake || isTools || isToolsWake || isIntegration || isBanExpiry) {
         const code=typeof error.code==='string' && /^[A-Za-z_]{2,64}$/.test(error.code) ? error.code : 'unavailable';
         return Response.json({ok:false,error:code},{status:Number.isInteger(error.status) && error.status>=400 && error.status<=599?error.status:503});
       }
@@ -173,6 +176,11 @@ export default {
       if(env.GROUPS) ctx.waitUntil((async()=>{
         if(await createStore(env.DB).setting('ready')==='1') {
           await dispatch(env,BROADCAST_COORDINATOR,'/broadcast/wake',{}).catch(()=>{console.warn('pilot_broadcast_wake_unavailable');});
+          // Recover expired bans in the same per-group queue as moderation.
+          const expiry=createBanExpiry({db:env.DB,api:null});
+          for(const chatId of await expiry.dueGroups({limit:12})) {
+            await dispatch(env,String(chatId),'/ban-expiry/wake',{chatId}).catch(()=>{console.warn('pilot_ban_expiry_wake_unavailable');});
+          }
           const tools=createToolServices({db:env.DB,api:createTelegram(env.BOT_TOKEN)});
           const groups=new Set([...(await tools.operations.nextDueGroups({limit:20})),...(await tools.governance.nextDueGroups({limit:20})),...(await tools.community.dueSupportChats(20))]);
           for(const chatId of groups)await dispatch(env,String(chatId),'/tools/wake',{chatId}).catch(()=>{console.warn('pilot_tools_wake_unavailable');});
