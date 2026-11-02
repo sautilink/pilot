@@ -9,8 +9,8 @@ import { createBroadcastStore } from './broadcast-store.js';
 import { createToolsCommands } from './tools-commands.js';
 import { loadUpdateContext } from './update-context.js';
 
-export const RULES = '<b>🛡 SautiLink Pilot</b>\nGroup lenye utulivu, mazungumzo yenye nafasi.\n\nLinks zisizoruhusiwa na ujumbe wa forward huondolewa.\nAdhabu: saa 24 → siku 7 → ban ya kudumu.\n\nTumia /rules kuona sheria za members, au fungua bot faraghani kwa mwongozo.';
-const ENGLISH_RULES = '<b>🛡 SautiLink Pilot</b>\nA calmer group. More room for conversation.\n\nUnapproved links and forwarded messages are removed.\nPenalties: 24 hours → 7 days → permanent ban.\n\nUse /rules for member rules, or open the bot privately for a guide.';
+export const RULES = '<b>🛡 SautiLink Pilot</b>\nGroup lenye utulivu, mazungumzo yenye nafasi.\n\nLink ya kwanza isiyoruhusiwa: ujumbe unafutwa na onyo linatolewa (hakuna ban).\nLink ikirudiwa au forward ikitumwa: saa 24 → siku 7 → ban ya kudumu.\n\nTumia /rules kuona sheria za members, au fungua bot faraghani kwa mwongozo.';
+const ENGLISH_RULES = '<b>🛡 SautiLink Pilot</b>\nA calmer group. More room for conversation.\n\nFirst prohibited link: deletion and a warning (no ban).\nRepeated links and forwarded messages: 24 hours → 7 days → permanent ban.\n\nUse /rules for member rules, or open the bot privately for a guide.';
 const admin = m => m?.status === 'creator' || m?.status === 'administrator';
 const validId = id => Number.isSafeInteger(Number(id)) && Number(id) !== 0;
 const userId = id => validId(id) && Number(id) > 0;
@@ -132,6 +132,12 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
     let row=snapshot.incident;
     if(time<=state.override_at) return 'admin_override';
     if(row?.status==='cancelled') return 'cancelled';
+    // A replay of an already recorded first-link warning must never turn
+    // the same message or album into a first strike.
+    if(row?.status==='warned') {
+      if(message.message_id!==row.message_id) await deleteMessage(message);
+      return await announcer.notify(row,message,true,context) ? 'notification_pending' : 'warned';
+    }
     if(row && ['failed','review'].includes(row.status)) {
       await deleteMessage(message); return row.status;
     }
@@ -152,15 +158,27 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
     }
     if(live.status==='kicked') { await deleteMessage(message); return 'already_banned'; }
     // queued messages from the same offence episode cannot escalate the punishment.
-    if(state.episode_at && (time<=state.episode_at || (state.active_until>0 && time<=state.active_until))) {
+    if(state.episode_at && (time<state.episode_at ||
+      (time===state.episode_at && state.strikes>0) ||
+      (state.active_until>0 && time<=state.active_until))) {
       await deleteMessage(message); return 'same_episode';
     }
+    // Two different link messages may arrive in the same Telegram second.
+    // After a first warning, the next distinct incident must not evade
+    // escalation simply because Telegram timestamps have 1-second precision.
     if(state.active_until===-1 || state.active_until>now) {
       // The live membership contradicts our previous ban: a human has overridden it.
       await store.override(chat,user,now); return 'admin_override';
     }
     if(!row) {
-      const strike=Math.min(3,state.strikes+1),duration=banDuration(strike);
+      // A first forbidden link is educational, never a strike. Forward-only
+      // and mixed link+forward cases retain the stricter existing policy.
+      // Legacy users with prior confirmed cases/strikes are not silently
+      // reclassified or granted a second free warning.
+      const firstLinkOnly=violation.reasons.length===1 && violation.reasons[0]==='link'
+        && state.strikes===0 && !state.last_incident;
+      const strike=firstLinkOnly ? 0 : Math.min(3,state.strikes+1);
+      const duration=strike===0 ? 0 : banDuration(strike);
       row=await store.plan({id:incidentId,chat_id:chat,user_id:user,message_id:message.message_id,event_at:time,created_at:now,strike,until_date:duration ? now+duration : 0,reasons:JSON.stringify(violation.reasons)});
     }
     // Fresh verification immediately before destructive actions, never cached admin lists.
@@ -170,6 +188,14 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
     await store.run('UPDATE incidents SET deleted=1 WHERE id=?',row.id);
     live=await member(chat,user);
     if(admin(live) || live.status==='kicked') { await store.status(row.id,'cancelled'); return 'membership_changed'; }
+    if(row.strike===0) {
+      const recorded=await store.confirmWarning(row,clock());
+      if(!recorded) { await store.status(row.id,'cancelled'); return 'admin_override'; }
+      row.status='warned';
+      await controlStore.audit({id:`incident:${row.id}`,chatId:chat,action:'link_warning',targetId:user,incidentId:row.id,
+        details:{strike:0,reasons:['link']},at:clock()}).catch(()=>{});
+      return await announcer.notify(row,message,true,context) ? 'notification_pending' : 'warned';
+    }
     const duration=banDuration(row.strike);
     row.until_date=duration ? clock()+duration : 0;
     await store.run("UPDATE incidents SET status='ban_sent',until_date=? WHERE id=?",row.until_date,row.id);

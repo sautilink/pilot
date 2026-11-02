@@ -145,7 +145,7 @@ test('group public commands are brief private pointers, and rules contain no adm
     assert.match(reply.reply_markup.inline_keyboard[0][0].url, /^https:\/\/t\.me\/sautilinkpilotbot\?start=home$/);
   }
   await f.command(groupMessage('/rules', USER));
-  assert.match(sent(f).at(-1).params.text, /Kosa 1/);
+  assert.match(sent(f).at(-1).params.text, /Link ya kwanza isiyoruhusiwa/);
   assert.doesNotMatch(sent(f).at(-1).params.text, sensitive);
   assert.equal(f.api.callsOf('getChatMember').length, 0);
 });

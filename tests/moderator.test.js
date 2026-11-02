@@ -69,10 +69,18 @@ class FakeTelegram {
   }
 }
 
-async function fixture(t) {
+async function fixture(t,{fresh=false}={}) {
   const db = new TestD1();
   await applySchema(db);
   t.after(() => db.close());
+  // Existing ban-path regression tests model members who already received
+  // their introductory link warning. Dedicated fresh=true tests verify
+  // the new user journey, including the full four-step sequence.
+  if(!fresh) for(const chat of [GROUP,OTHER_GROUP]) {
+    await createStore(db).member(chat,USER_ID);
+    await db.prepare('UPDATE members SET last_incident=? WHERE chat_id=? AND user_id=?')
+      .bind('previous-link-warning',String(chat),String(USER_ID)).run();
+  }
   const api = new FakeTelegram();
   let now = START;
   let updateId = 1;
@@ -671,4 +679,205 @@ test('broadcast discovery follows group migration but does not target private ch
   await f.moderator.handle(f.message({ text: 'Hello', chat: { id: USER_ID, type: 'private' } }));
   await f.moderator.handle(f.message({ text: 'Channel update', chat: { id: LINKED_CHANNEL, type: 'channel' } }));
   assert.equal((await f.db.prepare('SELECT COUNT(*) AS n FROM pilot_broadcast_groups').first()).n, 2);
+});
+
+
+test('new member first forbidden link is deleted, tagged and warned without incrementing strikes', async t=>{
+  const f=await fixture(t,{fresh:true});
+  const update=f.message({from:{id:USER_ID,is_bot:false,first_name:'<Juma & A>'}});
+  const result=await f.moderator.handle(update);
+  assert.equal(result.status,'warned');
+  assert.equal(f.api.callsOf('deleteMessage').length,1);
+  assert.equal(f.api.callsOf('banChatMember').length,0);
+  const notice=f.api.callsOf('sendMessage')[0].params;
+  assert.equal(notice.chat_id,GROUP);
+  assert.match(notice.text,/ONYO LA KWANZA/);
+  assert.match(notice.text,/tg:\/\/user\?id=101/);
+  assert.match(notice.text,/&lt;Juma &amp; A&gt;/);
+  assert.match(notice.text,/saa 24/);
+  assert.equal(notice.link_preview_options.is_disabled,true);
+  const member=await createStore(f.db).member(GROUP,USER_ID);
+  assert.equal(member.strikes,0);
+  assert.equal(member.active_until,0);
+  const incident=await createStore(f.db).incident(`${GROUP}:message:${update.message.message_id}`);
+  assert.equal(incident.status,'warned');
+  assert.equal(incident.strike,0);
+  assert.equal(incident.deleted,1);
+  assert.equal((await f.db.prepare('SELECT status FROM notification_delivery WHERE incident_id=?').bind(incident.id).first()).status,'sent');
+});
+
+test('fresh member follows warning then 24h then 7d then permanent for repeated forbidden links',async t=>{
+  const f=await fixture(t,{fresh:true});
+  await f.moderator.handle(f.message());
+  assert.equal(f.api.callsOf('banChatMember').length,0);
+  f.advance(2);
+  await f.moderator.handle(f.message());
+  const first=f.api.callsOf('banChatMember');
+  assert.equal(first.length,1);
+  assert.equal(first[0].params.until_date,f.now()+86400);
+  assert.equal((await createStore(f.db).member(GROUP,USER_ID)).strikes,1);
+  f.advance(2*86400);
+  f.api.member(GROUP,USER_ID,'member');
+  await f.moderator.handle(f.message());
+  assert.equal(f.api.callsOf('banChatMember')[1].params.until_date,f.now()+604800);
+  f.advance(8*86400);
+  f.api.member(GROUP,USER_ID,'member');
+  await f.moderator.handle(f.message());
+  const bans=f.api.callsOf('banChatMember');
+  assert.equal(bans.length,3);
+  assert.equal(bans[2].params.until_date,0);
+  const member=await createStore(f.db).member(GROUP,USER_ID);
+  assert.equal(member.strikes,3);
+  assert.equal(member.active_until,-1);
+  assert.equal((await f.db.prepare("SELECT COUNT(*) AS n FROM incidents WHERE strike=0 AND status='warned'").first()).n,1);
+});
+
+test('fresh user warning is at most once per message or album and history is group-specific',async t=>{
+  const f=await fixture(t,{fresh:true});
+  const update=f.message({media_group_id:'photos-a'});
+  await f.moderator.handle(update);
+  await f.moderator.handle(structuredClone(update));
+  await f.moderator.handle(f.message({media_group_id:'photos-a'}));
+  assert.equal(f.api.callsOf('banChatMember').length,0);
+  assert.equal(f.api.callsOf('sendMessage').length,1);
+  f.advance(2);
+  await f.moderator.handle(f.message({chat:{id:OTHER_GROUP,type:'supergroup'}}));
+  assert.equal(f.api.callsOf('banChatMember').length,0);
+  assert.equal(f.api.callsOf('sendMessage').length,2);
+});
+
+test('first link warning does not shield forwards, including a forwarded prohibited link',async t=>{
+  const a=await fixture(t,{fresh:true});
+  await a.moderator.handle(a.message({text:'forwarded',forward_origin:{type:'hidden_user',date:START-1}}));
+  assert.equal(a.api.callsOf('banChatMember').length,1);
+  assert.equal(a.api.callsOf('sendMessage')[0].params.text.includes('ONYO LA KWANZA'),false);
+  const b=await fixture(t,{fresh:true});
+  await b.moderator.handle(b.message({forward_origin:{type:'hidden_user',date:START-1}}));
+  assert.equal(b.api.callsOf('banChatMember').length,1);
+  assert.equal((await createStore(b.db).member(GROUP,USER_ID)).strikes,1);
+});
+
+test('if Telegram cannot delete first link, neither warning nor ban is recorded',async t=>{
+  const f=await fixture(t,{fresh:true});
+  f.api.hooks.set('deleteMessage',()=>false);
+  const update=f.message();
+  await assert.rejects(f.moderator.handle(update));
+  const row=await createStore(f.db).incident(`${GROUP}:message:${update.message.message_id}`);
+  assert.equal(row.status,'planned');
+  assert.equal((await createStore(f.db).member(GROUP,USER_ID)).strikes,0);
+  assert.equal(f.api.callsOf('sendMessage').length,0);
+  assert.equal(f.api.callsOf('banChatMember').length,0);
+  f.api.hooks.delete('deleteMessage');
+  await f.moderator.handle(structuredClone(update));
+  assert.equal((await createStore(f.db).incident(row.id)).status,'warned');
+  assert.equal(f.api.callsOf('sendMessage').length,1);
+});
+
+test('a lost warning response never spams the group or converts a replay to a ban',async t=>{
+  const f=await fixture(t,{fresh:true});
+  f.api.hooks.set('sendMessage',()=>{throw new TelegramError('uncertain response',0,true)});
+  const update=f.message();
+  await f.moderator.handle(update);
+  f.api.hooks.delete('sendMessage');
+  await f.moderator.handle(structuredClone(update));
+  assert.equal(f.api.callsOf('sendMessage').length,1);
+  assert.equal(f.api.callsOf('banChatMember').length,0);
+  assert.equal((await createStore(f.db).member(GROUP,USER_ID)).strikes,0);
+  assert.equal((await f.db.prepare('SELECT status FROM notification_delivery').first()).status,'unknown');
+  f.advance(2);
+  await f.moderator.handle(f.message());
+  assert.equal(f.api.callsOf('banChatMember').length,1);
+});
+
+test('warning mentions gracefully degrade to plain text when Telegram rejects HTML',async t=>{
+  const f=await fixture(t,{fresh:true});
+  f.api.hooks.set('sendMessage',(p,self)=>{
+    self.hooks.delete('sendMessage');
+    throw new TelegramError("Bad Request: can't parse entities",400,false);
+  });
+  await f.moderator.handle(f.message());
+  const n=f.api.callsOf('sendMessage');
+  assert.equal(n.length,2);
+  assert.match(n[0].params.text,/tg:\/\/user\?id=101/);
+  assert.equal(n[1].params.parse_mode,undefined);
+  assert.doesNotMatch(n[1].params.text,/tg:\/\/user\?id=/);
+  assert.equal(f.api.callsOf('banChatMember').length,0);
+});
+
+test('old confirmed strikes remain intact after rollout and cannot receive a free warning',async t=>{
+  const f=await fixture(t,{fresh:true});
+  const store=createStore(f.db);
+  await store.member(GROUP,USER_ID);
+  await store.run('UPDATE members SET strikes=1,active_until=0,episode_at=?,last_incident=? WHERE chat_id=? AND user_id=?',
+    START-86400,'legacy-ban',String(GROUP),String(USER_ID));
+  await f.moderator.handle(f.message());
+  assert.equal(f.api.callsOf('banChatMember').length,1);
+  assert.equal(f.api.callsOf('banChatMember')[0].params.until_date,f.now()+7*86400);
+});
+
+
+test('two distinct forbidden links in the same Telegram second still trigger warning then 24h ban',async t=>{
+  const f=await fixture(t,{fresh:true});
+  const first=f.message();
+  const second=f.message();
+  assert.equal(first.message.date,second.message.date);
+  await f.moderator.handle(first);
+  await f.moderator.handle(second);
+  assert.equal(f.api.callsOf('banChatMember').length,1);
+  assert.equal(f.api.callsOf('banChatMember')[0].params.until_date,f.now()+86400);
+  assert.equal((await createStore(f.db).member(GROUP,USER_ID)).strikes,1);
+});
+test('approved link gets no warning and a later unapproved link still gets first warning',async t=>{
+  const f=await fixture(t,{fresh:true});
+  await f.moderator.handle(f.message({text:'https://sautilink.com/news'}));
+  assert.equal(f.api.callsOf('sendMessage').length,0);
+  assert.equal(f.api.callsOf('deleteMessage').length,0);
+  await f.moderator.handle(f.message({text:'https://unapproved.example'}));
+  assert.equal(f.api.callsOf('sendMessage').length,1);
+  assert.equal(f.api.callsOf('banChatMember').length,0);
+});
+test('fresh first warning with English group language is tagged and translated',async t=>{
+  const f=await fixture(t,{fresh:true});
+  await createStore(f.db).setLanguage('group',GROUP,'en',f.now());
+  await f.moderator.handle(f.message());
+  const text=f.api.callsOf('sendMessage')[0].params.text;
+  assert.match(text,/FIRST LINK WARNING/);
+  assert.match(text,/tg:\/\/user\?id=101/);
+  assert.match(text,/24 hours/);
+  assert.doesNotMatch(text,/ONYO LA KWANZA|Ukirudia/);
+});
+test('warning respects an admin promotion before deletion and does not persist',async t=>{
+  const f=await fixture(t,{fresh:true});
+  let checks=0;
+  f.api.hooks.set('getChatMember',(params,self)=>{
+    if(params.user_id===BOT_ID)return {status:'administrator',can_delete_messages:true,can_restrict_members:true};
+    checks++;
+    return checks<2 ? {status:'member'} : {status:'administrator'};
+  });
+  await f.moderator.handle(f.message());
+  assert.equal(f.api.callsOf('sendMessage').length,0);
+  assert.equal(f.api.callsOf('banChatMember').length,0);
+  assert.equal((await createStore(f.db).member(GROUP,USER_ID)).strikes,0);
+  assert.equal((await f.db.prepare("SELECT COUNT(*) AS n FROM incidents WHERE status='warned'").first()).n,0);
+});
+test('rate-limited warning retries without changing strikes or duplicating a confirmed warning',async t=>{
+  const f=await fixture(t,{fresh:true});
+  f.api.hooks.set('sendMessage',(_params,self)=>{
+    self.hooks.delete('sendMessage');
+    throw new TelegramError('Too Many Requests',429,false,3);
+  });
+  const update=f.message();
+  const result=await f.moderator.handle(update);
+  assert.equal(result.status,'notification_pending');
+  assert.equal(result.retry,true);
+  assert.equal(f.api.callsOf('banChatMember').length,0);
+  assert.equal((await createStore(f.db).member(GROUP,USER_ID)).strikes,0);
+  await f.moderator.handle(structuredClone(update));
+  assert.equal(f.api.callsOf('sendMessage').length,1);
+  f.advance(4);
+  await f.moderator.handle(structuredClone(update));
+  assert.equal(f.api.callsOf('sendMessage').length,2);
+  await f.moderator.handle(structuredClone(update));
+  assert.equal(f.api.callsOf('sendMessage').length,2);
+  assert.equal(f.api.callsOf('banChatMember').length,0);
 });

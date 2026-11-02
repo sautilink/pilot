@@ -34,7 +34,7 @@ const labels = {
     myTitle: '📂 <b>Matukio yangu</b>', myEmpty: 'Hakuna tukio lako linalopatikana kwenye historia ya hivi karibuni.', myFoot: 'Taarifa hizi ni zako pekee. Kutuma rufaa hakubadili ban moja kwa moja; admin wa group ndiye huamua.',
     case: 'Tukio', group: 'Group', member: 'Mtumiaji', strike: 'Kosa', reason: 'Sababu', ban: 'Ban', at: 'Tarehe', permanent: 'Ya kudumu', hours: 'saa 24', days: 'siku 7', until: 'Hadi',
     link: 'link isiyoruhusiwa', forward: 'forwarded message', otherReason: 'ukaguzi wa sheria',
-    confirmed: 'Hatua imethibitishwa', cancelled: 'Hatua imesitishwa', failed: 'Hatua haikukamilika', planned: 'Inasubiri uthibitisho', corrected: 'Kosa limerekebishwa',
+    warned: 'Onyo la kwanza · hakuna ban', confirmed: 'Hatua imethibitishwa', cancelled: 'Hatua imesitishwa', failed: 'Hatua haikukamilika', planned: 'Inasubiri uthibitisho', corrected: 'Kosa limerekebishwa',
     notice: 'Tangazo', noticeSent: 'limetumwa', noticePending: 'linasubiri', noticeUnknown: 'halijathibitishwa', noticeFailed: 'halikutumwa', noticeCancelled: 'limesitishwa',
     appeal: 'Rufaa', appealOpen: 'inasubiri admin', appealResolved: 'imepitiwa', appealUsage: '📝 <b>Omba ukaguzi wa tukio</b>\n\nFungua /mystatus kupata ID ya tukio lako, kisha tuma:\n<code>/appeal ID_YA_TUKIO maelezo yako</code>\n\nAndika sababu kwa herufi zisizozidi 1,000. Kila tukio linapokea rufaa moja. Unaweza pia kutumia fomu kwenye paneli.',
     noCase: 'Tukio hilo halipatikani kwenye historia yako ya hivi karibuni. Fungua /mystatus kuangalia matukio yako.',
@@ -63,7 +63,7 @@ const labels = {
     myTitle: '📂 <b>My cases</b>', myEmpty: 'You have no cases in the recent history.', myFoot: 'These records belong only to you. An appeal does not automatically change a ban; the group’s admin decides.',
     case: 'Case', group: 'Group', member: 'Member', strike: 'Strike', reason: 'Reason', ban: 'Ban', at: 'Date', permanent: 'Permanent', hours: '24 hours', days: '7 days', until: 'Until',
     link: 'unapproved link', forward: 'forwarded message', otherReason: 'rule review',
-    confirmed: 'Action confirmed', cancelled: 'Action cancelled', failed: 'Action incomplete', planned: 'Awaiting confirmation', corrected: 'Strike corrected',
+    warned: 'First warning · no ban', confirmed: 'Action confirmed', cancelled: 'Action cancelled', failed: 'Action incomplete', planned: 'Awaiting confirmation', corrected: 'Strike corrected',
     notice: 'Announcement', noticeSent: 'sent', noticePending: 'pending', noticeUnknown: 'unconfirmed', noticeFailed: 'not sent', noticeCancelled: 'cancelled',
     appeal: 'Appeal', appealOpen: 'awaiting admin review', appealResolved: 'reviewed', appealUsage: '📝 <b>Request a case review</b>\n\nOpen /mystatus to find your case ID, then send:\n<code>/appeal CASE_ID your explanation</code>\n\nUse up to 1,000 characters for your reason. Each case accepts one appeal. You can also use the form in the panel.',
     noCase: 'That case is not in your recent history. Open /mystatus to find your cases.',
@@ -88,12 +88,12 @@ function rows(language, appUrl, tab = null, chatId = null) {
 
 function incidentText(row, language, personal = false) {
   const t = labels[language];
-  const status = row.corrected ? t.corrected : ({ confirmed: t.confirmed, cancelled: t.cancelled, failed: t.failed, planned: t.planned, pending: t.planned, review: t.planned }[row.status] || t.planned);
+  const status = row.corrected ? t.corrected : ({ warned: t.warned, confirmed: t.confirmed, cancelled: t.cancelled, failed: t.failed, planned: t.planned, pending: t.planned, review: t.planned }[row.status] || t.planned);
   const reasons = Array.isArray(row.reasons) ? row.reasons.map(reason => reason === 'link' ? t.link : reason === 'forward' ? t.forward : t.otherReason).join(', ') : t.otherReason;
   const lines = [
     `<b>${t.case}</b> <code>${safe(trim(row.id, 120))}</code>`,
     `${personal ? t.group : t.member}: <code>${safe(personal ? row.chat_id : row.user_id ?? '—')}</code> · ${safe(date(row.event_at, language))}`,
-    `${safe(status)} · ${t.strike}: ${count(row.strike)}/3`,
+    row.strike === 0 ? safe(status) : `${safe(status)} · ${t.strike}: ${count(row.strike)}/3`,
     `${t.reason}: ${safe(reasons)}`,
   ];
   if (row.status === 'confirmed' || row.corrected) lines.push(Number(row.until_date) > 0 ? `${t.until}: ${safe(date(row.until_date, language))}` : `${t.ban}: ${t.permanent}`);
