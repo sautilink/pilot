@@ -1,6 +1,7 @@
 import {createGuardrailStore} from './guardrail-store.js';
 import {escapeHtml} from './policy.js';
-import {fillTemplate,memberName,publicGroupRules} from './templates.js';
+import {fillTemplate,memberName,publicGroupRules,WELCOME_DEFAULTS,welcomeValues,renderWelcome} from './templates.js';
+import {createWelcomeExpiries} from './welcome-expiry.js';
 import {detectCommandSpam} from './command-spam.js';
 import {safeAuditDetails} from './control-store.js';
 
@@ -16,6 +17,7 @@ function fail(code,status=409) {const error=new Error(code);error.code=code;erro
  */
 export function createGuardrails({db,store,controlStore,api,clock,me,say}) {
   const records=createGuardrailStore(db);
+  const welcomeExpiries=createWelcomeExpiries({db,api,clock});
   const member=(chat,user)=>api.call('getChatMember',{chat_id:Number(chat),user_id:Number(user)});
   const audit=(id,chat,action,target,details={})=>controlStore.audit({id,chatId:chat,action,targetId:target,details,at:clock()});
 
@@ -217,25 +219,69 @@ export function createGuardrails({db,store,controlStore,api,clock,me,say}) {
     return 'flood';
   }
 
-  async function welcome(chat,user,eventAt,settings) {
-    if(!settings.welcome_enabled || !positive(user?.id) || user.is_bot || clock()-eventAt>120 || eventAt>clock()+60) return;
+  async function welcome(chat,user,eventAt,settings,{messageThreadId}={}) {
+    if(!settings?.welcome_enabled || !positive(user?.id) || user.is_bot
+      || clock()-eventAt>120 || eventAt>clock()+60) return 'disabled_or_stale';
     const group=await store.group(chat);
-    if(!group.enabled || eventAt<Math.max(group.activated_at,Number(await store.setting('ready_since') || 0))) return;
+    if(!group.enabled || eventAt<Math.max(group.activated_at,Number(await store.setting('ready_since')||0)))
+      return 'paused_or_old';
     await records.ensure();
-    const recent=await records.first("SELECT id FROM pilot_guard_actions WHERE chat_id=? AND target_id=? AND kind='welcome' AND created_at>? LIMIT 1",String(chat),String(user.id),clock()-60);
-    if(recent) return;
+    const recent=await records.first(`SELECT id FROM pilot_guard_actions
+      WHERE chat_id=? AND target_id=? AND kind='welcome' AND created_at>? LIMIT 1`,
+      String(chat),String(user.id),clock()-60);
+    if(recent)return 'duplicate';
+    // Join service messages and chat_member updates may describe the same join.
+    // Claim is durable BEFORE the Telegram call; uncertain results never
+    // trigger repeated public greetings or spam.
     const id=`welcome:${chat}:${user.id}:${eventAt}`;
-    if(!await records.claim({id,chatId:chat,targetId:user.id,kind:'welcome',now:clock()})) return;
+    if(!await records.claim({id,chatId:chat,targetId:user.id,kind:'welcome',now:clock()}))return 'duplicate';
     const language=await store.getLanguage('group',chat);
     try {
       const info=await api.call('getChat',{chat_id:Number(chat)});
-      const bot=await me(),name=memberName(user,language);
-      const template=settings[`welcome_${language}`] || (language==='en' ? 'Welcome, {user}! ✈️\nYou are joining {group}.\n\n{rules}' : 'Karibu, {user}! ✈️\nUmejiunga na {group}.\n\n{rules}');
-      const text=fillTemplate(template,{user:name,group:info.title || 'Group',rules:publicGroupRules(settings,language)});
-      const sent=await say(chat,escapeHtml(text),{reply_markup:{inline_keyboard:[[{text:language==='en' ? '📖 Read the rules' : '📖 Soma sheria',callback_data:undefined,url:`https://t.me/${bot.username}?start=rules`}]]}});
-      await records.finish(id,Number.isSafeInteger(sent?.message_id)?'sent':'unknown',clock(),sent?.message_id ?? null);
-      if(Number.isSafeInteger(sent?.message_id)) await records.health(chat,'welcome_delivery_failed',false,clock());
-    } catch(error) {await records.finish(id,failure(error),clock());await records.health(chat,'welcome_delivery_failed',true,clock());}
+      const bot=await me();
+      const template=settings[`welcome_${language}`] || WELCOME_DEFAULTS[language] || WELCOME_DEFAULTS.sw;
+      const wantCount=template.includes('{member_count}');
+      let memberCount;
+      if(wantCount) {
+        try {memberCount=await api.call('getChatMemberCount',{chat_id:Number(chat)});}catch { /* Optional placeholder; leave unknown. */ }
+      }
+      const values=welcomeValues({user,chat:{...info,id:chat},bot,language,
+        rules:publicGroupRules(settings,language),memberCount,now:new Date(clock()*1000)});
+      const rendered=renderWelcome(template,values,{userId:user.id});
+      const customLabel=String(settings.welcome_button_label||'').trim();
+      const customUrl=String(settings.welcome_button_url||'').trim();
+      const ruleLink=`https://t.me/${bot.username}?start=rules`;
+      const keyboard=[[{text:customLabel&&customUrl?customLabel.slice(0,48):language==='en'?'📖 Read the rules':'📖 Soma sheria',
+        url:customLabel&&customUrl?customUrl:ruleLink}]];
+      const payload={chat_id:Number(chat),text:rendered.html,parse_mode:'HTML',
+        link_preview_options:{is_disabled:true},
+        reply_markup:{inline_keyboard:keyboard}};
+      if(Number.isSafeInteger(messageThreadId)&&messageThreadId>0)payload.message_thread_id=messageThreadId;
+      let sent;
+      try {sent=await api.call('sendMessage',payload);}
+      catch(error) {
+        // Telegram HTML parse errors can originate from client versions.
+        // Safe plain-text fallback is only allowed on *definitive* rejection;
+        // uncertain results might already have delivered the first message.
+        if(error?.code!==400 || error?.ambiguous!==false ||
+          !/parse entities|can't parse entities/i.test(error.message||'')) throw error;
+        const fallback={...payload,text:rendered.plain};delete fallback.parse_mode;
+        sent=await api.call('sendMessage',fallback);
+      }
+      const delivered=Number.isSafeInteger(sent?.message_id)&&sent.message_id>0;
+      await records.finish(id,delivered?'sent':'unknown',clock(),delivered?sent.message_id:null);
+      if(!delivered)return 'unknown';
+      await records.health(chat,'welcome_delivery_failed',false,clock());
+      if(Number(settings.welcome_delete_seconds)>0){
+        try {await welcomeExpiries.schedule(chat,sent.message_id,settings.welcome_delete_seconds);}
+        catch {await records.health(chat,'welcome_expiry_schedule_failed',true,clock());}
+      }
+      return 'sent';
+    } catch(error){
+      await records.finish(id,failure(error),clock());
+      await records.health(chat,'welcome_delivery_failed',true,clock());
+      return 'failed';
+    }
   }
 
   async function membership(change) {
@@ -361,5 +407,5 @@ export function createGuardrails({db,store,controlStore,api,clock,me,say}) {
     await records.ensure();
     await records.run('DELETE FROM pilot_flood_events WHERE chat_id=? AND user_id=?',String(chat),String(user));
   }
-  return {commandSpam,flood,welcome,membership,joinRequest,callback,control,humanOverride,records};
+  return {commandSpam,flood,welcome,membership,joinRequest,callback,control,humanOverride,records,welcomeExpiries};
 }
