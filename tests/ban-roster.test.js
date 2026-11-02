@@ -221,3 +221,65 @@ test('diagnostic never queries arbitrary unknown ID or writes new member state',
   assert.equal(await f.db.prepare('SELECT 1 FROM members WHERE chat_id=? AND user_id=?').bind(String(CHAT),'999').first(),null);
   assert.equal((await f.roster.inspect(CHAT,'invalid')).invalid,true);
 });
+
+
+test('admin bancheck verifies a Telegram no-post restriction even without an old ban case',async t=>{
+  const f=await setup(t);
+  await f.store.member(CHAT,101);
+  await f.store.restriction(CHAT,101); // create additive schema
+  await f.db.prepare('INSERT INTO member_restrictions(chat_id,user_id,level,until_date,episode_at,incident_id) VALUES(?,?,?,?,?,?)')
+    .bind(String(CHAT),'101',2,NOW+43200,NOW-50,'restrict:2').run();
+  f.users.set(101,{status:'restricted',is_member:true,can_send_messages:false,until_date:NOW+43200});
+  const before=await f.store.restriction(CHAT,101);
+  const result=await f.roster.inspect(CHAT,101);
+  assert.equal(result.known,true);
+  assert.deepEqual(result.restriction,{level:2,until:NOW+43200});
+  assert.equal(result.telegram.kind,'restricted');
+  assert.equal(result.telegram.matchesPilot,true);
+  assert.equal(result.telegram.isMember,true);
+  assert.equal(result.telegram.canPost,false);
+  const en=formatBanCheck(result,{language:'en',groupTitle:'Tech <Hub>'});
+  assert.match(en,/Pilot no-post restriction stage: 2\/5/);
+  assert.match(en,/Telegram: RESTRICTED/);
+  assert.match(en,/Posting: blocked/);
+  assert.match(en,/Member remains in group: yes/);
+  assert.match(en,/Tech &lt;Hub&gt;/);
+  const sw=formatBanCheck(result,{language:'sw'});
+  assert.match(sw,/Hatua ya Pilot ya kutopost: 2\/5/);
+  assert.match(sw,/Telegram: AMEWEKEWA RESTRICTION/);
+  assert.deepEqual(await f.store.restriction(CHAT,101),before);
+  assert.equal(f.calls.filter(x=>x.method==='restrictChatMember'||x.method==='banChatMember').length,0);
+});
+
+test('admin diagnostic distinguishes an external restriction override from recorded Pilot stage',async t=>{
+  const f=await setup(t);
+  await f.store.member(CHAT,101);
+  await f.store.restriction(CHAT,101);
+  await f.db.prepare('INSERT INTO member_restrictions(chat_id,user_id,level,until_date) VALUES(?,?,?,?)')
+    .bind(String(CHAT),'101',1,NOW+3600).run();
+  f.users.set(101,{status:'restricted',is_member:true,can_send_messages:false,until_date:NOW+604800});
+  const result=await f.roster.inspect(CHAT,101);
+  assert.equal(result.telegram.matchesPilot,false);
+  assert.match(formatBanCheck(result,{language:'en'}),/administrator may have changed it/);
+  assert.equal((await f.store.restriction(CHAT,101)).level,1);
+  assert.equal((await f.store.restriction(CHAT,101)).until_date,NOW+3600);
+});
+
+test('restriction expiry and unknown API state never turn into a claimed ban release',async t=>{
+  const f=await setup(t);
+  await f.store.member(CHAT,101);
+  await f.store.restriction(CHAT,101);
+  await f.db.prepare('INSERT INTO member_restrictions(chat_id,user_id,level,until_date) VALUES(?,?,?,?)')
+    .bind(String(CHAT),'101',1,NOW-5).run();
+  f.users.set(101,{status:'member'});
+  const released=await f.roster.inspect(CHAT,101);
+  assert.equal(released.telegram.kind,'not_banned');
+  assert.match(formatBanCheck(released,{language:'en'}),/Telegram: NOT BANNED/);
+  assert.match(formatBanCheck(released,{language:'en'}),/Pilot no-post restriction stage: 1\/5/);
+  const unreachable=createBanRoster({db:f.db,clock:()=>NOW,
+    api:{call:async()=>{throw {code:429,message:'secret TOKEN'};}}});
+  const unknown=await unreachable.inspect(CHAT,101);
+  assert.equal(unknown.telegram.kind,'unknown');
+  assert.match(formatBanCheck(unknown,{language:'en'}),/Telegram: UNVERIFIED/);
+  assert.doesNotMatch(formatBanCheck(unknown,{language:'en'}),/secret TOKEN/);
+});
