@@ -1,4 +1,5 @@
 import { createStore } from './store.js';
+import { createGuardrailStore } from './guardrail-store.js';
 
 // Reconcile Telegram timed bans only after verifying the original Pilot
 // incident and exact Telegram deadline. Run inside the per-group DO queue.
@@ -13,6 +14,7 @@ const released = status => ['left','member','restricted','administrator','creato
 
 export function createBanExpiry({db,api,clock=()=>Math.floor(Date.now()/1000)}) {
   const store=createStore(db);
+  const health=createGuardrailStore(db);
   const rows=async(sql,...args)=>(await db.prepare(sql).bind(...args).all()).results || [];
 
   // Persistent cursor prevents one stuck group starving other groups.
@@ -73,6 +75,13 @@ export function createBanExpiry({db,api,clock=()=>Math.floor(Date.now()/1000)}) 
       // Preserve strikes and incident history for the 24h -> 7d -> permanent policy.
       await store.run('UPDATE members SET active_until=0 WHERE chat_id=? AND user_id=? AND active_until=? AND last_incident=?',
         chat,String(user),until,incident);
+    }
+    // Surface any stuck expiry to opted-in administrators, rather than leaving
+    // a ban silently stuck. Clear it once no Pilot temporary ban remains due.
+    if(failed || conflicts) await health.health(chat,'ban_expiry_review',true,clock());
+    else {
+      const pending=await rows(`SELECT m.user_id ${DUE} AND m.chat_id=? LIMIT 1`,clock(),chat);
+      if(!pending.length) await health.health(chat,'ban_expiry_review',false,clock());
     }
     return {ok:true,checked:candidates.length,unbanned,alreadyReleased,conflicts,failed};
   }
