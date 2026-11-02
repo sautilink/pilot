@@ -5,13 +5,14 @@ import { createFeatureCommands, FEATURE_COMMANDS, ADMIN_FEATURE_COMMANDS } from 
 import { createBroadcastCommands } from './broadcast-commands.js';
 import { sendPrivateReply } from './private-replies.js';
 import { createBanExpiry } from './ban-expiry.js';
+import { createBanRoster, formatBanRoster } from './ban-roster.js';
 
 const isAdmin = member => member?.status === 'creator' || member?.status === 'administrator';
 const validId = value => Number.isSafeInteger(Number(value)) && Number(value) !== 0;
 const userId = value => validId(value) && Number(value) > 0;
 const groupId = value => /^-[1-9]\d*$/.test(String(value)) && validId(value);
 const isGroup = chat => ['group', 'supergroup'].includes(chat?.type);
-const commandPattern = /^\/(start|help|pilot|about|howitworks|rules|connect|developer|admin|status|strikes|forgive|unban|pause|resume|testnotice|language|dashboard|checklink|mystatus|appeal|history|appeals|settings|stats|alerts|report|whitelist)(?:@([A-Za-z0-9_]+))?(?:\s+([\s\S]*))?$/i;
+const commandPattern = /^\/(start|help|pilot|about|howitworks|rules|connect|developer|admin|status|bans|strikes|forgive|unban|pause|resume|testnotice|language|dashboard|checklink|mystatus|appeal|history|appeals|settings|stats|alerts|report|whitelist)(?:@([A-Za-z0-9_]+))?(?:\s+([\s\S]*))?$/i;
 const pages = { start: 'home', pilot: 'home', help: 'help', about: 'about', howitworks: 'how', rules: 'rules', connect: 'connect', developer: 'developer', language: 'language' };
 const publicStartPages = new Set(['home', 'about', 'how', 'rules', 'connect', 'developer', 'help', 'language']);
 const callbackPages = new Set(['home', 'about', 'how', 'rules', 'connect', 'developer', 'help', 'admin', 'status', 'language', ...FEATURE_COMMANDS]);
@@ -134,6 +135,7 @@ function noticeSummary(notice, language) {
 export function createBotExperience({ db, store, api, clock = () => Math.floor(Date.now() / 1000), me, say, control, controlStore, dispatchControl, owner, dispatchBroadcast, appUrl = 'https://pilot.sautilink.com/app' }) {
   const member = (chat, user) => api.call('getChatMember', { chat_id: Number(chat), user_id: Number(user) });
   const expiry = createBanExpiry({db,api:null,clock});
+  const banRoster = createBanRoster({db,api,clock});
   const identity = me || (() => api.call('getMe'));
   const send = say || ((chat, text, extra = {}) => api.call('sendMessage', {
     chat_id: Number(chat), text, parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...extra,
@@ -363,6 +365,10 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
       if (choice.page) return await sendPage(message, choice.page), true;
       if (command === 'admin' || command === 'status') {
         await sendPage(message, await adminPage(command, bot, message.from, choice.chat, language));
+      } else if (command === 'bans') {
+        const page=argument===undefined || argument==='' ? 1 : /^\d{1,4}$/.test(argument) ? Number(argument) : 0;
+        const result=await banRoster.list(choice.chat.id,page);
+        await quietSend(message.chat.id,formatBanRoster(result,{language,groupTitle:choice.chat.title}));
       } else if (command === 'strikes') {
         if (!/^\d+$/.test(argument || '') || !userId(argument)) {
           await quietSend(message.chat.id, textFor(language, 'strikesUsage'), { reply_markup: renderBotPage('admin', { groupId: choice.chat.id, language }).reply_markup });
@@ -394,6 +400,14 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
         await audit(message, updateId, 'language', null, { language: argument });
         await privateReply(message, bot, textFor(personalLanguage, 'groupLanguageSaved', { language: argument === 'en' ? 'English' : 'Kiswahili' }), language);
       }
+      return true;
+    }
+    if (command === 'bans') {
+      if (anonymous(message)) { await pointer(message, bot, language, true); return true; }
+      const page=argument===undefined || argument==='' ? 1 : /^\d{1,4}$/.test(argument) ? Number(argument) : 0;
+      const result=await banRoster.list(chat,page);
+      await store.setAdminContext(message.from.id,chat,clock());
+      await privateReply(message,bot,formatBanRoster(result,{language:personalLanguage,groupTitle:message.chat.title}),language);
       return true;
     }
     if (command === 'status') {
