@@ -392,21 +392,33 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
   async function start() {
     try { app?.ready(); app?.expand(); if (app?.isVersionAtLeast?.('6.1')) { const color = document.documentElement?.dataset?.theme === 'dark' ? '#0b0b0e' : '#ffffff'; app.setHeaderColor(color); app.setBackgroundColor(color); } } catch { /* Older Telegram clients still use the standard page. */ }
     if (!initData) return;
-    $('login').hidden = true; $('app').hidden = false; $('content').append(loading());
+    const params = new URLSearchParams(location.search);
+    const hint = params.get('view') || params.get('tab');
+    const requestedView = ({ links: 'whitelist', mycases: 'mystatus', checker: 'checklink' })[hint] || hint;
+    const validViews = ['overview', 'incidents', 'appeals', 'joins', 'settings', 'whitelist', 'activity', 'mystatus', 'checklink'];
+    // Resolve the requested action before any network requests. Personal
+    // actions must never wait for the potentially slow group-admin roster.
+    state.view = validViews.includes(requestedView) ? requestedView : 'overview';
+    $('login').hidden = true; $('app').hidden = false;
+    render();
+    const personalTask = state.view === 'mystatus' ? loadOwn() : null;
     try {
       const data = await query('groups', null); state.groups = data.groups || []; state.groupsCursor = data.nextCursor || null;
-      const params = new URLSearchParams(location.search); const preferred = params.get('chat') || params.get('group');
+      const preferred = params.get('chat') || params.get('group');
       let preferredOverview = null;
       if (preferred && /^-[1-9]\d{0,15}$/.test(preferred) && !state.groups.some(group => String(group.id) === preferred)) {
         try { preferredOverview = await query('overview', preferred); appendGroups([preferredOverview.group]); } catch { /* A display hint never grants access. */ }
       }
       state.chatId = String(state.groups.find(group => String(group.id) === preferred)?.id || state.groups[0]?.id || '') || null;
       if (preferredOverview && String(preferredOverview.group.id) === state.chatId) state.overview = preferredOverview;
-      const hint = params.get('view') || params.get('tab'); const requestedView = ({ links: 'whitelist', mycases: 'mystatus', checker: 'checklink' })[hint] || hint; const validViews = ['overview', 'incidents', 'appeals', 'joins', 'settings', 'whitelist', 'activity', 'mystatus', 'checklink'];
-      state.view = validViews.includes(requestedView) ? requestedView : state.groups.length ? 'overview' : 'mystatus';
       if (!state.groups.length && !['mystatus', 'checklink'].includes(state.view)) state.view = 'mystatus';
       $('header-state').replaceChildren(icon('verified'), document.createTextNode(t('Telegram imethibitishwa', 'Telegram verified')));
-      render(); if (state.chatId && !state.overview) await loadGroup(); if (state.view === 'mystatus') await loadOwn();
+      // Keep text already entered while the group list was loading.
+      const checkerText = state.view === 'checklink' ? $('field-checkText')?.value : null;
+      render();
+      if (checkerText != null && $('field-checkText')) $('field-checkText').value = checkerText;
+      if (state.chatId && !state.overview && !['mystatus', 'checklink'].includes(state.view)) await loadGroup();
+      if (state.view === 'mystatus' && !personalTask) await loadOwn();
       if (!state.groups.length) { const tip = info(t('Unasimamia group? Tuma /admin kwenye group hilo, kisha fungua kiungo cha faragha. Group litaonekana hapa baada ya nafasi yako kuthibitishwa.', 'Manage a group? Send /admin in that group, then open the private link. It will appear here after your admin role is verified.')); $('content').prepend(tip); }
     } catch (error) { showError(error); $('content').replaceChildren(empty(t('Fungua tena kupitia Telegram', 'Reopen through Telegram'), errorText(error.code), button(t('Fungua bot', 'Open bot'), () => { location.href = 'https://t.me/sautilinkpilotbot?start=dashboard'; }, 'secondary', 'send'))); }
   }
