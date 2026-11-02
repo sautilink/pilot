@@ -282,15 +282,52 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
     const rules = el('div', 'field-grid'); for (const lang of ['sw', 'en']) addField(rules, lang === 'sw' ? t('Maelezo ya sheria · Kiswahili', 'Rule notes · Swahili') : t('Maelezo ya sheria · English', 'Rule notes · English'), { name: `rules_${lang}`, value: settings[`rules_${lang}`], rows: 3, maxLength: 600, note: t('Hadi herufi 600. Huongezwa kwenye sheria za msingi.', 'Up to 600 characters. Added to the base rules.') }); body.append(rules, el('hr', 'setting-divider'));
     const welcome = toggle(t('Washa', 'Enable'), 'welcome_enabled', settings.welcome_enabled); inputs.welcome_enabled = welcome.input;
     append(body, sectionHeading(t('Ujumbe wa ukaribisho', 'Welcome message'), t('Karibisha members wapya kwa ujumbe mfupi. Hakuna adhabu kwa kutobofya sheria.', 'Welcome new members with a short message. Not opening the rules does not cause a penalty.'), welcome.box, 'users'));
-    const welcomeFields = el('div', 'field-grid'); for (const lang of ['sw', 'en']) addField(welcomeFields, lang === 'sw' ? 'Kiswahili' : 'English', { name: `welcome_${lang}`, value: settings[`welcome_${lang}`], rows: 3, maxLength: 400, note: t('Hadi herufi 400 · {user}, {group}, {rules}. Acha tupu kutumia ujumbe wa kawaida.', 'Up to 400 characters · {user}, {group}, {rules}. Leave blank for the default welcome.') }); body.append(welcomeFields);
+    const welcomeFields = el('div', 'field-grid'); for (const lang of ['sw', 'en']) addField(welcomeFields, lang === 'sw' ? 'Kiswahili' : 'English', { name: `welcome_${lang}`, value: settings[`welcome_${lang}`], rows: 7, maxLength: 1800, note: t('Hadi herufi 1,800. Acha tupu kutumia mfano wa kawaida. Tags zinafanya kazi kwa Kiswahili na English.', 'Up to 1,800 characters. Leave blank for the default. Tags work in Swahili and English.') }); body.append(welcomeFields);
+    const tags = ['mention','name','first_name','last_name','username','user_id','group_name','group_id','rules','rules_link','group_link','bot_username','member_count','date','time','user','group','user_mention'];
+    const tagPanel = el('div', 'baseline');
+    for (const key of tags) tagPanel.append(button('{'+key+'}', () => {
+      const target=inputs[`welcome_${groupLang.value}`];
+      const begin=target.selectionStart??target.value.length,end=target.selectionEnd??target.value.length;
+      target.setRangeText('{'+key+'}',begin,end,'end');
+      target.dispatchEvent(new Event('input',{bubbles:true}));
+      target.focus();
+    }, 'ghost small'));
+    body.append(el('p','card-copy',t('Gusa tag uiweke kwenye ujumbe. {mention} itamtaja member kwa link ya Telegram; wengine ni maandishi salama.', 'Tap a tag to insert it. {mention} links to the joining member’s Telegram account; others are safe text.')),tagPanel);
+    const buttonFields=el('div','field-grid');
+    addField(buttonFields,t('Maandishi ya kitufe (si lazima)','Custom button text (optional)'),{
+      name:'welcome_button_label',value:settings.welcome_button_label||'',maxLength:48,
+      note:t('Hadi herufi 48. Tupu = Soma sheria.','48 characters maximum. Blank = Read rules.')
+    });
+    addField(buttonFields,t('URL ya kitufe · HTTPS','Button URL · HTTPS'),{
+      name:'welcome_button_url',value:settings.welcome_button_url||'',maxLength:350,
+      note:t('Mfano: https://example.org/rules. Tupu = ukurasa wa sheria wa bot.','Example: https://example.org/rules. Blank = bot rules link.')
+    });
+    body.append(buttonFields);
+    addField(body,t('Futa ujumbe wa welcome baada ya','Auto-delete welcome after'),{
+      name:'welcome_delete_seconds',value:String(settings.welcome_delete_seconds||0),
+      options:[['0',t('Usifute moja kwa moja','Never')],['60',t('Dakika 1','1 minute')],['300',t('Dakika 5','5 minutes')],['900',t('Dakika 15','15 minutes')],['3600',t('Saa 1','1 hour')],['86400',t('Siku 1','1 day')]],
+      note:t('Pilot hufuta welcome yake tu, bila kufuta ujumbe wa member.','Pilot deletes only its own welcome message, never member posts.')
+    });
     const welcomePreview = el('div', 'preview'); const welcomeCopy = el('div', 'preview-copy'); append(welcomePreview, el('p', 'preview-label', t('Mfano wa ukaribisho · haujatumiwa', 'Welcome preview · not sent')), welcomeCopy); body.append(welcomePreview, el('hr', 'setting-divider'));
     function updateWelcomePreview() {
       const lng = groupLang.value; const raw = inputs[`welcome_${lng}`].value || (lng === 'en' ? 'Welcome, {user}! ✈️\nYou are joining {group}.\n\n{rules}' : 'Karibu, {user}! ✈️\nUmejiunga na {group}.\n\n{rules}');
       const commandFilter = inputs.command_spam_enabled ? inputs.command_spam_enabled.checked : settings.command_spam_enabled !== false;
       const rules = (commandFilter ? previewData.rules : previewData.rulesWithoutCommandFilter)[lng];
-      welcomeCopy.textContent = fillTemplate(raw, { user: 'Asha', group: data.group.title, rules: rules + (inputs[`rules_${lng}`].value.trim() ? `\n\n${inputs[`rules_${lng}`].value.trim()}` : '') }, 3500);
+      const fullRules=rules + (inputs[`rules_${lng}`].value.trim() ? `\n\n${inputs[`rules_${lng}`].value.trim()}` : '');
+      const groupName=data.group.title;
+      welcomeCopy.textContent = fillTemplate(raw,{
+        user:'Asha Example',name:'Asha Example',first_name:'Asha',last_name:'Example',
+        mention:'@Asha Example',user_mention:'@Asha Example',username:'@asha_example',
+        user_id:'123456789',group:groupName,group_name:groupName,group_id:String(data.group.id),
+        rules:fullRules,rules_link:'https://t.me/sautilinkpilotbot?start=rules',
+        group_link:'https://t.me/examplegroup',bot_username:'@sautilinkpilotbot',
+        member_count:'125',date:'2 Nov 2026',time:'13:00 UTC'
+      },3500);
+      const label=inputs.welcome_button_label.value.trim();
+      const url=inputs.welcome_button_url.value.trim();
+      welcomeCopy.textContent+='\n\n['+(label&&url?label:t('📖 Soma sheria','📖 Read the rules'))+'] '+(label&&url?url:'https://t.me/sautilinkpilotbot?start=rules');
     }
-    [groupLang, inputs.welcome_sw, inputs.welcome_en, inputs.rules_sw, inputs.rules_en].forEach(node => node.addEventListener('input', updateWelcomePreview)); updateWelcomePreview();
+    [groupLang, inputs.welcome_sw, inputs.welcome_en, inputs.rules_sw, inputs.rules_en,inputs.welcome_button_label,inputs.welcome_button_url,inputs.welcome_delete_seconds].forEach(node => node.addEventListener('input', updateWelcomePreview)); updateWelcomePreview();
     append(body, sectionHeading(t('Muonekano wa matangazo', 'Announcement style'), t('Jina, sababu na muda wa adhabu hubaki kwenye taarifa. Maandishi yako huongezwa kwa usalama.', 'The name, reason and penalty duration always remain in the notice. Your text is added safely.'), null, 'notification'));
     addField(body, t('Mtindo', 'Style'), { name: 'notice_template', value: settings.notice_template, options: [['detailed', t('Maelezo kamili', 'Detailed')], ['compact', t('Mfupi', 'Compact')], ['formal', t('Rasmi', 'Formal')]] });
     const notices = el('div', 'field-grid'); for (const lang of ['sw', 'en']) addField(notices, lang === 'sw' ? t('Nyongeza · Kiswahili', 'Extra text · Swahili') : t('Nyongeza · English', 'Extra text · English'), { name: `notice_${lang}`, value: settings[`notice_${lang}`], rows: 3, maxLength: 240, note: '{user}, {reason}, {duration}, {group} · 240' }); body.append(notices);
@@ -319,7 +356,7 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
     append(body, sectionHeading(t('Ukaguzi wa maombi ya kujiunga', 'Join request screening'), t('Hufanya kazi kwa maombi ya kujiunga. Pilot anahitaji ruhusa ya kuwaalika users. Maombi yasiyokamilisha uthibitisho hubaki kwa ukaguzi wa admin.', 'Works with join requests. Pilot needs invite-user permission. Incomplete verification stays available for admin review.'), joins.box, 'joins'));
     addField(body, t('Namna ya ukaguzi', 'Screening mode'), { name: 'join_gate_mode', value: settings.join_gate_mode, options: [['review', t('Admin aamue kila ombi', 'An admin reviews each request')], ['challenge', t('Uthibitisho mwepesi, kisha ukubali', 'Simple verification, then approval')]] });
     const save = button(t('Hifadhi mipangilio', 'Save settings'), null, '', 'check'); save.type = 'submit'; append(body, append(el('div', 'form-footer'), el('p', '', t('Admins, admin asiyejulikana na channel halisi iliyo linked bado wanaheshimiwa.', 'Admins, anonymous admins and the actual linked channel remain exempt.')), save)); form.append(body);
-    form.addEventListener('submit', event => { event.preventDefault(); if (!form.reportValidity()) return; const next = {}; for (const [name, input] of Object.entries(inputs)) if (name !== 'groupLanguage') next[name] = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value; perform('configure', { settings: next, language: groupLang.value }); });
+    form.addEventListener('submit', event => { event.preventDefault(); if (!form.reportValidity()) return; const next = {}; for (const [name, input] of Object.entries(inputs)) if (name !== 'groupLanguage') next[name] = input.type === 'checkbox' ? input.checked : input.type === 'number' || name === 'welcome_delete_seconds' ? Number(input.value) : input.value; perform('configure', { settings: next, language: groupLang.value }); });
     content.append(card(t('Mipangilio ya group', 'Group settings'), [form]));
     const subscription = el('form', 'card-body'); subscription.style.marginTop = '0';
     const alerts = toggle(t('Nitumie taarifa za matatizo faraghani', 'Send me private issue alerts'), 'alerts', data.subscription.alerts); subscription.append(alerts.box);
