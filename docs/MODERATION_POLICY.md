@@ -50,13 +50,25 @@ status `restricted`. This is not a ban strike. Regular ban strikes remain
 `members.strikes` 0..3, and old ban history is not rewritten. Telegram
 restriction timestamps are stored in Unix seconds.
 
-For members with **pre-existing confirmed ban strikes**, the existing ban
-progression is preserved rather than retroactively replacing old penalties;
-the restriction ladder applies to members without an old ban strike. Their
-link-warning eligibility still follows the existing warning-delivery ledger.
-Historical bans/restrictions are not revoked on deploy. A previously warned
-member with zero ban strikes starts at Restriction 1/5. No restriction
-levels are inferred or fabricated from old bans.
+The **five restrictions apply to every member**, including those with
+pre-existing confirmed ban strikes (1/3, 2/3 or 3/3). A member who has no
+confirmed link-warning delivery gets the warning first. After confirmed
+delivery, their next prohibited link starts Restriction 1/5, regardless of
+old ban strike history. The five restriction levels are tracked separately.
+No old ban strike is counted as a completed restriction and no existing
+active Telegram ban is lifted during deployment.
+
+After completing Restriction 5/5, the next prohibited link returns to the
+member's preserved ban escalation: an old 1/3 becomes 2/3 (7-day ban), while
+an old 2/3 becomes 3/3 (permanent ban). New users with no old ban strikes
+begin with 1/3 (24-hour ban). Admins can use /forgive to reset the group
+history explicitly, but rollout itself never wipes previous strikes.
+
+A planned positive ban incident from the previous release that has **not**
+been executed is translated to the correct negative restriction stage before
+Telegram is contacted. Confirmed or uncertain ban outcomes are never
+rewritten or retried blindly. Historical restrictions and warnings are
+preserved, including any delivered warning from an older release.
 
 `/unban` changes a Telegram ban but preserves strike/warning/restriction
 history. `/forgive` resets both ban strikes, link warning and the
