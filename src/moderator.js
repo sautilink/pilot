@@ -158,9 +158,14 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
     }
     if(live.status==='kicked') { await deleteMessage(message); return 'already_banned'; }
     // queued messages from the same offence episode cannot escalate the punishment.
-    if(state.episode_at && (time<=state.episode_at || (state.active_until>0 && time<=state.active_until))) {
+    if(state.episode_at && (time<state.episode_at ||
+      (time===state.episode_at && state.strikes>0) ||
+      (state.active_until>0 && time<=state.active_until))) {
       await deleteMessage(message); return 'same_episode';
     }
+    // Two different link messages may arrive in the same Telegram second.
+    // After a first warning, the next distinct incident must not evade
+    // escalation simply because Telegram timestamps have 1-second precision.
     if(state.active_until===-1 || state.active_until>now) {
       // The live membership contradicts our previous ban: a human has overridden it.
       await store.override(chat,user,now); return 'admin_override';
