@@ -53,6 +53,11 @@ class FakeTelegram {
           { status: 'administrator', user: { id: BOT_ID, is_bot: true }, can_delete_messages: true, can_restrict_members: true },
           ...Array.from(this.members.entries()).filter(([key, member]) => key.startsWith(`${params.chat_id}:`) && ['creator', 'administrator'].includes(member.status)).map(([, member]) => member),
         ];
+      case 'restrictChatMember':
+        this.member(params.chat_id,params.user_id,'restricted',{
+          is_member:true,until_date:params.until_date,can_send_messages:false
+        });
+        return true;
       case 'banChatMember':
         this.member(params.chat_id, params.user_id, 'kicked', { until_date: params.until_date ?? 0 });
         return true;
