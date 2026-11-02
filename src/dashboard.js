@@ -145,7 +145,9 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
     // Retain the selected task when Telegram reloads or the user changes language.
     try { const url = new URL(location.href); url.searchParams.set('tab', view); url.searchParams.delete('view'); history.replaceState(null, '', url.href); }
     catch { /* Mini App navigation still works if history is restricted. */ }
-    $('banner').hidden = true; render(); if (view === 'mystatus' && !state.own) loadOwn();
+    $('banner').hidden = true; render();
+    if (view === 'mystatus' && !state.own) loadOwn();
+    else if (!['mystatus','checklink'].includes(view) && state.chatId && !state.overview) loadGroup();
   }
   function navigation() {
     const nav = $('sidebar'); nav.replaceChildren(); const inner = el('div', 'sidebar-inner');
@@ -393,6 +395,7 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
     }
   }
   async function refreshData() {
+    if (state.view === 'checklink') { $('banner').hidden = true; render(); return; }
     if (state.view === 'mystatus') { state.own = null; render(); await loadOwn(); return; }
     if (state.chatId) await loadGroup(); else await loadOwn();
   }
@@ -427,7 +430,13 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
       if (state.chatId && !state.overview && !['mystatus', 'checklink'].includes(state.view)) await loadGroup();
       if (state.view === 'mystatus' && !personalTask) await loadOwn();
       if (!state.groups.length) { const tip = info(t('Unasimamia group? Tuma /admin kwenye group hilo, kisha fungua kiungo cha faragha. Group litaonekana hapa baada ya nafasi yako kuthibitishwa.', 'Manage a group? Send /admin in that group, then open the private link. It will appear here after your admin role is verified.')); $('content').prepend(tip); }
-    } catch (error) { showError(error); $('content').replaceChildren(empty(t('Fungua tena kupitia Telegram', 'Reopen through Telegram'), errorText(error.code), button(t('Fungua bot', 'Open bot'), () => { location.href = 'https://t.me/sautilinkpilotbot?start=dashboard'; }, 'secondary', 'send'))); }
+    } catch (error) {
+      showError(error);
+      // Group discovery may be unavailable while personal actions still work.
+      // Do not replace a working checker or personal case view with Home.
+      if (['mystatus','checklink'].includes(state.view)) return;
+      $('content').replaceChildren(empty(t('Fungua tena kupitia Telegram', 'Reopen through Telegram'), errorText(error.code), button(t('Fungua bot', 'Open bot'), () => { location.href = 'https://t.me/sautilinkpilotbot?start=dashboard'; }, 'secondary', 'send')));
+    }
   }
   $('group-select').addEventListener('change', event => { if (state.busy) return; state.chatId = event.target.value; loadGroup(); });
   $('more-groups').addEventListener('click', loadMoreGroups);
