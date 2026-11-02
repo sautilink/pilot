@@ -13,6 +13,9 @@ const GROUP=-1001001,OTHER_GROUP=-1001002,ADMIN=102,MEMBER=101,TARGET=103,BOT=90
 async function fixture(t) {
   const db=new TestD1();t.after(()=>db.close());await applySchema(db);
   const base=createStore(db),control=createControlStore(db);await control.ensure();
+  // Existing bot-command integration tests exercise the post-restriction ban.
+  await db.prepare('INSERT INTO member_restrictions(chat_id,user_id,level) VALUES(?,?,5)')
+    .bind(String(GROUP),String(MEMBER)).run();
   const calls=[],roles=new Map();let sequence=100;
   const api={async call(method,params={}){
     calls.push({method,params:structuredClone(params)});

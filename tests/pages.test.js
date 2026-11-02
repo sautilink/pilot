@@ -226,7 +226,7 @@ function simulatorHarness(lang = 'sw') {
   const elements = Object.fromEntries([...html.matchAll(/id="(sim-[a-z-]+)"/g)].map(match => [match[1], element()]));
   const scenarios = ['blocked', 'allowed', 'forward', 'admin', 'linked'].map(scenario => element({ scenario }));
   const groups = ['A', 'B'].map(simGroup => element({ simGroup }));
-  const stages = ['0', '1', '2', '3'].map(stage => element({ stage }));
+  const stages = ['0', '1', '2', '3', '4', '5', '6', '7', '8'].map(stage => element({ stage }));
   let calls = 0;
   vm.runInNewContext(script, {
     document: {
@@ -244,56 +244,44 @@ function simulatorHarness(lang = 'sw') {
   };
 }
 
-test('simulator separates groups and caps the repeated-offense demonstration at permanent', () => {
-  const h = simulatorHarness();
-  assert.equal(h.elements['sim-count'].textContent, '0 / 3');
+test('interactive simulator demonstrates one warning, five no-post restrictions then all three bans',()=>{
+  const h=simulatorHarness();
+  assert.equal(h.elements['sim-count'].textContent,'Restriction 0/5 · Ban 0/3');
   h.run();
-  assert.equal(h.elements['sim-count'].textContent, '0 / 3');
-  assert.equal(h.elements['sim-outcome-title'].textContent, 'Onyo la link. Hakuna ban.');
-  assert.match(h.elements['sim-announcement'].textContent, /@Juma.*Ukirudia/);
-  h.run();
-  assert.equal(h.elements['sim-count'].textContent, '1 / 3');
-  assert.equal(h.elements['sim-outcome-title'].textContent, 'Ban ya saa 24.');
-  assert.match(h.elements['sim-step-note'].textContent, /ban ya awali imeisha/);
-  assert.match(h.elements['sim-announcement'].textContent, /\nSababu:/);
-  h.run();
-  assert.equal(h.elements['sim-outcome-title'].textContent, 'Ban ya siku 7.');
-  h.scenario('forward');
-  assert.equal(h.elements['sim-forward'].hidden, false);
-  h.run();
-  assert.equal(h.elements['sim-outcome-title'].textContent, 'Permanent ban.');
-  assert.equal(h.elements['sim-run'].disabled, true);
-  h.run();
-  assert.equal(h.elements['sim-count'].textContent, '3 / 3');
+  assert.equal(h.elements['sim-outcome-title'].textContent,'Onyo la link. Hakuna ban.');
+  assert.match(h.elements['sim-announcement'].textContent,/restriction ya saa 1/);
+  for(const [level,time] of [[1,'saa 1'],[2,'saa 12'],[3,'saa 24'],[4,'siku 3'],[5,'siku 7']]){
+    h.run();
+    assert.match(h.elements['sim-outcome-title'].textContent,new RegExp('Restriction ya kutopost: '+time));
+    assert.equal(h.elements['sim-count'].textContent,`Restriction ${level}/5 · Ban 0/3`);
+    assert.equal(h.elements['sim-run'].disabled,false);
+  }
+  for(const [level,title] of [[1,'Ban ya saa 24.'],[2,'Ban ya siku 7.'],[3,'Permanent ban.']]){
+    h.run();
+    assert.equal(h.elements['sim-outcome-title'].textContent,title);
+    assert.equal(h.elements['sim-count'].textContent,`Restriction 5/5 · Ban ${level}/3`);
+  }
+  assert.equal(h.elements['sim-run'].disabled,true);
+  assert.equal(h.requests(),0);
   h.group('B');
-  assert.equal(h.elements['sim-count'].textContent, '0 / 3');
-  assert.equal(h.elements['sim-run'].disabled, false);
-  h.run();
-  assert.equal(h.elements['sim-count'].textContent, '1 / 3');
-  h.group('A');
-  assert.equal(h.elements['sim-count'].textContent, '3 / 3');
-  assert.equal(h.elements['sim-count-b'].textContent, '1/3');
-  assert.equal(h.requests(), 0);
+  assert.equal(h.elements['sim-count'].textContent,'Restriction 0/5 · Ban 0/3');
+  h.run();h.run();
+  assert.equal(h.elements['sim-count-b'].textContent,'1/5 · 0/3');
+  h.group('A');assert.equal(h.elements['sim-count-a'].textContent,'5/5 · 3/3');
+  h.reset();
+  assert.equal(h.elements['sim-count'].textContent,'Restriction 0/5 · Ban 0/3');
 });
 
-test('simulator preserves strikes for whitelisted links, admins and linked channel examples', () => {
-  const h = simulatorHarness();
-  h.run();
-  h.run();
-  for (const scenario of ['allowed', 'admin', 'linked']) {
-    h.scenario(scenario);
-    h.run();
-    assert.equal(h.elements['sim-outcome'].dataset.tone, 'allowed');
-    assert.equal(h.elements['sim-count'].textContent, '1 / 3');
-    assert.equal(h.elements['sim-announcement'].hidden, true);
+test('whitelisted links, admins and linked channel do not advance restriction or ban stage',()=>{
+  const h=simulatorHarness();
+  h.run();h.run();
+  for(const scenario of ['allowed','admin','linked']){
+    h.scenario(scenario);h.run();
+    assert.equal(h.elements['sim-outcome'].dataset.tone,'allowed');
+    assert.equal(h.elements['sim-count'].textContent,'Restriction 1/5 · Ban 0/3');
+    assert.equal(h.elements['sim-announcement'].hidden,true);
   }
-  assert.equal(h.elements['sim-forward'].hidden, false);
-  h.reset();
-  assert.equal(h.elements['sim-count-a'].textContent, '0/3');
-  assert.equal(h.elements['sim-count-b'].textContent, '0/3');
-  assert.equal(h.elements['sim-run'].disabled, false);
-  assert.equal(h.elements['sim-outcome'].dataset.tone, 'idle');
-  assert.equal(h.requests(), 0);
+  assert.equal(h.requests(),0);
 });
 
 test('public visitor navigation hides owner setup and provides honest local demo and private bot guide', () => {
@@ -350,34 +338,20 @@ test('English pages translate explanations and FAQs as well as headings', () => 
   assert.match(privacy, /Telegram and Cloudflare/);
 });
 
-test('English demo translates messages, decisions and time progression without changing moderation', () => {
-  const h = simulatorHarness('en');
-  assert.equal(h.elements['sim-outcome-title'].textContent, 'What will Pilot do?');
-  assert.equal(h.elements['sim-message'].textContent, 'Join this offer:\nhttps://offers.example/today');
+test('English simulator accurately translates five restrictions before bans',()=>{
+  const h=simulatorHarness('en');
   h.run();
-  assert.equal(h.elements['sim-outcome-title'].textContent, 'Link warning. No ban.');
-  assert.equal(h.elements['sim-count'].textContent, '0 / 3');
-  assert.match(h.elements['sim-announcement'].textContent, /@Juma.*another prohibited link will trigger a ban/);
-  h.run();
-  assert.equal(h.elements['sim-outcome-title'].textContent, 'Banned for 24 hours.');
-  assert.equal(h.elements['sim-announcement'].textContent, 'Juma has been banned for 24 hours.\nReason: Posting an unapproved link.');
-  assert.match(h.elements['sim-step-note'].textContent, /previous ban has expired and Juma has rejoined/);
-  h.run();
-  assert.equal(h.elements['sim-outcome-title'].textContent, 'Banned for 7 days.');
-  h.scenario('forward');
-  assert.equal(h.elements['sim-forward'].textContent, 'Forwarded from example channel');
-  h.run();
-  assert.equal(h.elements['sim-outcome-title'].textContent, 'Permanent ban.');
-  assert.match(h.elements['sim-announcement'].textContent, /permanently\.\nReason: Posting a forwarded message\./);
-  assert.equal(h.elements['sim-run'].disabled, true);
-  h.group('B');
-  for (const [scenario, title] of [['allowed', 'Approved link. All clear.'], ['admin', 'Admins have permission.'], ['linked', 'Linked channel. All clear.']]) {
-    h.scenario(scenario);
+  assert.equal(h.elements['sim-outcome-title'].textContent,'Link warning. No ban.');
+  assert.match(h.elements['sim-announcement'].textContent,/one-hour no-post restriction/);
+  for(const time of ['1 hour','12 hours','24 hours','3 days','7 days']){
     h.run();
-    assert.equal(h.elements['sim-outcome-title'].textContent, title);
-    assert.equal(h.elements['sim-count'].textContent, '0 / 3');
+    assert.equal(h.elements['sim-outcome-title'].textContent,'No-post restriction: '+time);
+    assert.match(h.elements['sim-outcome-copy'].textContent,/stays in the group but cannot post/);
   }
-  assert.equal(h.requests(), 0);
+  h.run();assert.equal(h.elements['sim-outcome-title'].textContent,'Banned for 24 hours.');
+  h.run();assert.equal(h.elements['sim-outcome-title'].textContent,'Banned for 7 days.');
+  h.run();assert.equal(h.elements['sim-outcome-title'].textContent,'Permanent ban.');
+  assert.equal(h.requests(),0);
 });
 
 test('English operator feedback preserves credential handling and key redaction', async () => {
@@ -434,7 +408,7 @@ test('public pages render the shared icon artwork before JavaScript and load mot
   for (const tone of ['idle', 'blocked', 'allowed']) assert.ok(home.includes(`outcome-symbol--${tone}`));
   const h = simulatorHarness('en');
   h.run();
-  assert.equal(h.elements['sim-run-label'].textContent, 'Show the next offense');
+  assert.equal(h.elements['sim-run-label'].textContent, 'Show the next stage');
   assert.equal(h.elements['sim-outcome'].dataset.tone, 'blocked');
   assert.equal(h.requests(), 0);
 });

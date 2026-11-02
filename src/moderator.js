@@ -1,4 +1,4 @@
-import { analyzeMessage, banDuration } from './policy.js';
+import { analyzeMessage, banDuration, restrictionDuration, NO_POST_PERMISSIONS } from './policy.js';
 import { createStore } from './store.js';
 import { createAnnouncer } from './announcements.js';
 import { createBotExperience } from './commands.js';
@@ -9,8 +9,8 @@ import { createBroadcastStore } from './broadcast-store.js';
 import { createToolsCommands } from './tools-commands.js';
 import { loadUpdateContext } from './update-context.js';
 
-export const RULES = '<b>🛡 SautiLink Pilot</b>\nGroup lenye utulivu, mazungumzo yenye nafasi.\n\nLinks zisizoruhusiwa na ujumbe wa forward huondolewa.\nLink ya kwanza isiyoruhusiwa: onyo lenye tag, bila ban. Ukirudia: saa 24 → siku 7 → ban ya kudumu, kulingana na historia ya adhabu.\nUjumbe wa forward bila link iliyokatazwa unaendelea kufuata adhabu moja kwa moja.\n\nTumia /rules kuona sheria za members, au fungua bot faraghani kwa mwongozo.';
-const ENGLISH_RULES = '<b>🛡 SautiLink Pilot</b>\nA calmer group. More room for conversation.\n\nUnapproved links and forwarded messages are removed.\nFirst unapproved link: a tagged warning without a ban. Repeat violations: 24 hours → 7 days → permanent ban, based on existing penalty history.\nForwards without a prohibited link continue directly to penalties.\n\nUse /rules for member rules, or open the bot privately for a guide.';
+export const RULES = '<b>🛡 SautiLink Pilot</b>\nGroup lenye utulivu, mazungumzo yenye nafasi.\n\nLinks zisizoruhusiwa na ujumbe wa forward huondolewa.\nLink ya kwanza isiyoruhusiwa: onyo lenye tag, bila adhabu. Ukirudia: restriction ya kutopost saa 1 → 12 → 24 → siku 3 → siku 7, huku ukibaki member. Baada ya 5/5: ban saa 24 → siku 7 → permanent. Historia ya zamani inahifadhiwa.\nUjumbe wa forward bila link iliyokatazwa unaendelea kufuata adhabu moja kwa moja.\n\nTumia /rules kuona sheria za members, au fungua bot faraghani kwa mwongozo.';
+const ENGLISH_RULES = '<b>🛡 SautiLink Pilot</b>\nA calmer group. More room for conversation.\n\nUnapproved links and forwarded messages are removed.\nFirst unapproved link: a tagged warning without a penalty. Repeat: no-post restrictions for 1h → 12h → 24h → 3d → 7d (member remains); after 5/5, bans for 24h → 7d → permanent. Old ban strikes remain.\nForwards without a prohibited link continue directly to penalties.\n\nUse /rules for member rules, or open the bot privately for a guide.';
 const admin = m => m?.status === 'creator' || m?.status === 'administrator';
 const validId = id => Number.isSafeInteger(Number(id)) && Number(id) !== 0;
 const userId = id => validId(id) && Number(id) > 0;
@@ -129,6 +129,7 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
     let live=initialMember;
     if(admin(live)) return 'admin';
     const state=snapshot.member;
+    const restriction=snapshot.restriction;
     let row=snapshot.incident;
     if(time<=state.override_at) return 'admin_override';
     if(row?.status==='cancelled') return 'cancelled';
@@ -159,6 +160,34 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
       await controlStore.audit({id:`incident:${row.id}`,chatId:chat,action:'ban_confirmed',targetId:user,incidentId:row.id,details:{strike:row.strike,until:row.until_date,reasons:violation.reasons},at:now});
       return await announcer.notify(row,message,true,context) ? 'notification_pending' : 'confirmed';
     }
+    if(row && ['restriction_sent','restricted','restriction_uncertain'].includes(row.status)) {
+      if(message.message_id!==row.message_id) await deleteMessage(message);
+      // A lost response must never trigger a second restriction request.
+      // Telegram is authoritative for the live state and expiry.
+      const match=live.status==='restricted' && live.is_member!==false &&
+        Number(live.until_date||0)===Number(row.until_date) && live.can_send_messages===false;
+      if(!match) {
+        if(row.status==='restricted' && Number(row.until_date)<=now) return 'restricted_expired';
+        await store.status(row.id,'review');
+        return 'review';
+      }
+      if(row.status!=='restricted') row=await store.confirmRestriction(row,now);
+      if(row?.status!=='restricted') return 'review';
+      return await announcer.notify(row,message,true,context) ? 'notification_pending' : 'restricted';
+    }
+    // Suppress additional violations while a Telegram restriction is active:
+    // the member cannot normally post, but queued/edited messages can arrive.
+    if(restriction?.until_date>now) {
+      await deleteMessage(message);
+      return 'restriction_active';
+    }
+    // Don't silently lift a restriction or override any later human decision.
+    if(restriction?.until_date>0 && restriction.until_date<=now &&
+      live.status==='restricted' && live.can_send_messages===false &&
+      Number(live.until_date||0)>now) {
+      await deleteMessage(message);
+      return 'restriction_external';
+    }
     if(live.status==='kicked') { await deleteMessage(message); return 'already_banned'; }
     if(violation.blockedLinks.length>0 && snapshot.linkWarning?.delivered_at>0 && time<=snapshot.linkWarning.delivered_at) {
       // A queued message sent before the warning reached Telegram cannot prove
@@ -188,7 +217,13 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
       // incidents. Preserve existing bans and continue their progression only
       // after this member has used the new per-group link warning.
       const warning=violation.blockedLinks.length>0 && !snapshot.linkWarning?.delivered_at;
-      const strike=warning ? 0 : Math.min(3,state.strikes+1),duration=warning ? 0 : banDuration(strike);
+      // Forward-only retains existing policy; prohibited links (including a
+      // forwarded link) use the educational restriction ladder, unless the
+      // member already has a confirmed legacy ban strike.
+      const restrict=!warning && violation.blockedLinks.length>0 &&
+        state.strikes===0 && (restriction?.level||0)<5;
+      const strike=warning ? 0 : restrict ? -(restriction.level+1) : Math.min(3,state.strikes+1);
+      const duration=warning ? 0 : restrict ? restrictionDuration(-strike) : banDuration(strike);
       row=await store.plan({id:incidentId,chat_id:chat,user_id:user,message_id:message.message_id,event_at:time,created_at:now,strike,until_date:duration ? now+duration : 0,reasons:JSON.stringify(violation.reasons)});
     }
     if(row.status==='planned' && row.strike>0 && violation.blockedLinks.length>0 && !snapshot.linkWarning?.delivered_at) {
@@ -221,6 +256,31 @@ export function createModerator({db,api,clock=()=>Math.floor(Date.now()/1000),di
     await store.run('UPDATE incidents SET deleted=1 WHERE id=?',row.id);
     live=await member(chat,user);
     if(admin(live) || live.status==='kicked') { await store.status(row.id,'cancelled'); return 'membership_changed'; }
+    if(row.strike<0) {
+      // A restriction never removes the member from the supergroup. Telegram
+      // lifts it at until_date; the ledger keeps the attained level.
+      const level=-row.strike;
+      row.until_date=clock()+restrictionDuration(level);
+      await store.run("UPDATE incidents SET status='restriction_sent',until_date=? WHERE id=?",row.until_date,row.id);
+      try {
+        const result=await api.call('restrictChatMember',{
+          chat_id:chat,user_id:user,permissions:NO_POST_PERMISSIONS,
+          use_independent_chat_permissions:true,until_date:row.until_date
+        });
+        if(result!==true) throw new Error('Restriction not confirmed');
+      } catch(error) {
+        if(error.code===429 && error.ambiguous===false) {
+          await store.status(row.id,'planned'); throw error;
+        }
+        await store.status(row.id,error.ambiguous===false?'failed':'restriction_uncertain');
+        return error.ambiguous===false?'failed':'uncertain';
+      }
+      row=await store.confirmRestriction(row,clock());
+      if(row?.status!=='restricted') return 'review';
+      await controlStore.audit({id:`incident:${row.id}`,chatId:chat,action:'restriction_confirmed',targetId:user,
+        incidentId:row.id,details:{level,until:row.until_date,reasons:violation.reasons},at:clock()}).catch(()=>{});
+      return await announcer.notify(row,message,true,context) ? 'notification_pending' : 'restricted';
+    }
     const duration=banDuration(row.strike);
     row.until_date=duration ? clock()+duration : 0;
     await store.run("UPDATE incidents SET status='ban_sent',until_date=? WHERE id=?",row.until_date,row.id);

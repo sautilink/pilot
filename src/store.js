@@ -36,6 +36,17 @@ CREATE TABLE IF NOT EXISTS member_link_warnings (
   PRIMARY KEY(chat_id,user_id)
 );
 ` + LINK_WARNING_ADOPTION_SQL;
+export const RESTRICTION_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS member_restrictions (
+  chat_id TEXT NOT NULL, user_id TEXT NOT NULL,
+  level INTEGER NOT NULL DEFAULT 0 CHECK(level BETWEEN 0 AND 5),
+  until_date INTEGER NOT NULL DEFAULT 0,
+  episode_at INTEGER NOT NULL DEFAULT 0,
+  incident_id TEXT,
+  PRIMARY KEY(chat_id,user_id)
+);
+CREATE INDEX IF NOT EXISTS member_restrictions_due ON member_restrictions(until_date);
+`;
 export const EXPERIENCE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS notification_delivery (
   incident_id TEXT PRIMARY KEY,
@@ -77,7 +88,7 @@ CREATE TABLE IF NOT EXISTS processed_updates (
   update_id INTEGER PRIMARY KEY, processed_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS processed_age ON processed_updates(processed_at);
-` + EXPERIENCE_SCHEMA_SQL + LINK_WARNING_SCHEMA_SQL + CONTROL_SCHEMA_SQL + GUARDRAIL_SCHEMA_SQL + OWNER_SCHEMA_SQL + BROADCAST_SCHEMA_SQL;
+` + EXPERIENCE_SCHEMA_SQL + LINK_WARNING_SCHEMA_SQL + RESTRICTION_SCHEMA_SQL + CONTROL_SCHEMA_SQL + GUARDRAIL_SCHEMA_SQL + OWNER_SCHEMA_SQL + BROADCAST_SCHEMA_SQL;
 
 export const applySchema = db => applyCompleteSchema(db, SCHEMA_SQL);
 
@@ -89,9 +100,39 @@ export function createStore(db) {
     await ensureExtras();
     return ensureSchemaFamily(db, 'linkwarnings', LINK_WARNING_SCHEMA_SQL);
   };
+  const ensureRestrictions = () => ensureSchemaFamily(db,'restrictions',RESTRICTION_SCHEMA_SQL);
   const adoptMemberWarnings = (chat,user) => db.prepare(adoptLinkWarningsSql(true)).bind(String(chat),String(user));
   return {
-    run, first, ensureExtras, ensureLinkWarnings,
+    run, first, ensureExtras, ensureLinkWarnings, ensureRestrictions,
+    async restriction(chat,user) {
+      await ensureRestrictions();
+      return (await first('SELECT * FROM member_restrictions WHERE chat_id=? AND user_id=?',String(chat),String(user)))
+        || {chat_id:String(chat),user_id:String(user),level:0,until_date:0,episode_at:0,incident_id:null};
+    },
+    async confirmRestriction(row,now) {
+      await ensureRestrictions();
+      const level=-row.strike;
+      if(!Number.isSafeInteger(level)||level<1||level>5) throw new RangeError('Invalid restriction stage');
+      // API success has already been confirmed. Restriction level and the
+      // incident are committed together; existing ban strikes stay untouched.
+      const changes=await db.batch([
+        db.prepare(`INSERT INTO member_restrictions(chat_id,user_id,level,until_date,episode_at,incident_id)
+          SELECT chat_id,user_id,?,?,event_at,id FROM incidents
+          WHERE id=? AND strike=? AND status IN ('restriction_sent','restriction_uncertain')
+          AND EXISTS(SELECT 1 FROM members m WHERE m.chat_id=incidents.chat_id
+            AND m.user_id=incidents.user_id AND m.override_at<incidents.event_at)
+          ON CONFLICT(chat_id,user_id) DO UPDATE SET
+          level=MAX(member_restrictions.level,excluded.level),
+          until_date=excluded.until_date,episode_at=excluded.episode_at,
+          incident_id=excluded.incident_id
+          WHERE excluded.level>=member_restrictions.level`).bind(level,row.until_date,row.id,row.strike),
+        db.prepare(`UPDATE incidents SET status='restricted' WHERE id=? AND status IN ('restriction_sent','restriction_uncertain')
+          AND EXISTS(SELECT 1 FROM member_restrictions r WHERE r.chat_id=incidents.chat_id
+            AND r.user_id=incidents.user_id AND r.incident_id=incidents.id)`).bind(row.id),
+        db.prepare('SELECT * FROM incidents WHERE id=?').bind(row.id)
+      ]);
+      return changes.at(-1).results[0];
+    },
     async linkWarning(chat,user) {
       await ensureLinkWarnings();
       const results=await db.batch([
@@ -127,7 +168,7 @@ export function createStore(db) {
       return results[1].results[0];
     },
     async moderationState(chat,user,incidentId) {
-      await ensureLinkWarnings();
+      await Promise.all([ensureLinkWarnings(),ensureRestrictions()]);
       const chatId=String(chat), target=user == null ? null : String(user);
       const statements=[
         db.prepare('INSERT OR IGNORE INTO groups(chat_id) VALUES(?)').bind(chatId),
@@ -144,11 +185,16 @@ export function createStore(db) {
         db.prepare('SELECT * FROM member_link_warnings WHERE chat_id=? AND user_id=?').bind(chatId,target),
       );
       statements.push(db.prepare('SELECT * FROM incidents WHERE id=?').bind(incidentId));
+      if(target!==null) statements.push(db.prepare('SELECT * FROM member_restrictions WHERE chat_id=? AND user_id=?').bind(chatId,target));
       const results=await db.batch(statements);
       const member=target===null ? null : results[3].results[0] || {
         chat_id:chatId,user_id:target,strikes:0,last_incident:null,active_until:0,episode_at:0,override_at:0,
       };
-      return {group:results[1].results[0],activation:Number(results[2].results[0]?.value || 0),member,linkWarning:target===null ? null : results[5].results[0] || null,incident:results.at(-1).results[0] || null};
+      return {group:results[1].results[0],activation:Number(results[2].results[0]?.value || 0),member,
+        linkWarning:target===null ? null : results[5].results[0] || null,
+        incident:results[target===null?3:6].results[0] || null,
+        restriction:target===null ? null : results[7].results[0] ||
+          {chat_id:chatId,user_id:target,level:0,until_date:0,episode_at:0,incident_id:null}};
     },
     incident(id) { return first('SELECT * FROM incidents WHERE id=?',id); },
     async plan(row) {
@@ -191,7 +237,7 @@ export function createStore(db) {
       await db.batch(statements);
     },
     async override(chat,user,at,reset=false,updateId=null) {
-      await ensureExtras();
+      await Promise.all([ensureExtras(),ensureRestrictions()]);
       if(reset) await ensureLinkWarnings();
       const changes=[
         db.prepare('INSERT OR IGNORE INTO members(chat_id,user_id) VALUES(?,?)').bind(String(chat),String(user)),
@@ -202,6 +248,9 @@ export function createStore(db) {
         db.prepare("UPDATE notification_delivery SET status='cancelled',error_kind='admin_override',updated_at=? WHERE status='pending' AND incident_id IN (SELECT id FROM incidents WHERE chat_id=? AND user_id=? AND event_at<=?)")
           .bind(at,String(chat),String(user),at)
       ];
+      changes.push(db.prepare(`UPDATE member_restrictions SET
+        ${reset ? 'level=0,incident_id=NULL,' : ''} until_date=CASE WHEN episode_at<=? THEN 0 ELSE until_date END
+        WHERE chat_id=? AND user_id=?`).bind(at,String(chat),String(user)));
       // Forgiveness is the explicit fresh start. Unban and ordinary human
       // overrides preserve both the prior strike level and link warning.
       if(reset) changes.push(db.prepare('DELETE FROM member_link_warnings WHERE chat_id=? AND user_id=? AND warned_at<=?').bind(String(chat),String(user),at));

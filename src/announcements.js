@@ -24,8 +24,8 @@ export function formatAnnouncement(row,message,success=true,language='sw',settin
     const title=en ? '⚠️ LINK WARNING' : '⚠️ ONYO LA LINK';
     const reason=en ? 'The message containing a prohibited link has been removed.' : 'Ujumbe wenye link isiyoruhusiwa umeondolewa.';
     const warning=en
-      ? 'This is your one link warning in this group. If you post a prohibited link again, you will be banned. Ban levels: 24 hours → 7 days → permanent. Existing strikes still apply.'
-      : 'Hili ni onyo lako moja la link kwenye group hili. Ukituma tena link isiyoruhusiwa, utafungiwa. Viwango vya ban: saa 24 → siku 7 → kudumu. Strikes za awali zinaendelea kuhesabiwa.';
+      ? 'This is your first link warning, with no punishment. Further prohibited links lead to no-post restrictions: 1 hour → 12 hours → 24 hours → 3 days → 7 days. After all five, bans: 24 hours → 7 days → permanent. Existing ban strikes remain.'
+      : 'Hili ni onyo la kwanza la link bila adhabu. Links zinazofuata huleta restrictions za kutopost: saa 1 → saa 12 → saa 24 → siku 3 → siku 7. Baada ya hatua zote tano, bans: saa 24 → siku 7 → permanent. Ban strikes za zamani zinahifadhiwa.';
     const noBan=en ? 'No ban or strike has been added for this warning.' : 'Onyo hili halijaongeza ban wala strike.';
     const plain=[title,'',name,'',reason,warning,noBan,'',FOOTER_PLAIN].join('\n');
     const rich=[`<b>${title}</b>`,'',`<a href="tg://user?id=${Number(row.user_id)}">${escapeHtml(name)}</a>`,'',reason,warning,noBan,'',FOOTER_RICH].join('\n');
@@ -33,6 +33,26 @@ export function formatAnnouncement(row,message,success=true,language='sw',settin
     // actual tag if Telegram rejects HTML and the sender has no username.
     const user={id:Number(row.user_id),is_bot:!!message.from?.is_bot,first_name:message.from?.first_name || name};
     return {rich,plain,plainEntities:[{type:'text_mention',offset:title.length+2,length:name.length,user}]};
+  }
+  if(row.status==='restricted') {
+    const level=-Number(row.strike);
+    const durations={1:en?'1 hour':'Saa 1',2:en?'12 hours':'Saa 12',
+      3:en?'24 hours':'Saa 24',4:en?'3 days':'Siku 3',5:en?'7 days':'Siku 7'};
+    const title=en?'🔇 MEMBER RESTRICTED':'🔇 MEMBER AMEWEKEWA RESTRICTION';
+    const reason=en?'Prohibited link or forwarded link was removed.':'Link isiyoruhusiwa au link iliyoforward imefutwa.';
+    const next=level===5
+      ? (en?'Next prohibited link after this restriction: a 24-hour ban, then 7 days, then permanent.':'Link nyingine isiyoruhusiwa baada ya restriction hii: ban ya saa 24, kisha siku 7, halafu permanent.')
+      : (en?'Further prohibited links after each restriction ends advance the restriction ladder.':'Link nyingine isiyoruhusiwa kila restriction ikiisha itaongeza hatua ya restriction.');
+    const summary=en?'The member stays in this group and may read posts, but cannot send messages or media until the restriction ends.':'Member anabaki ndani ya group na anaweza kusoma posts, lakini hawezi kutuma ujumbe wala media hadi restriction iishe.';
+    const label=en?'Stage':'Hatua';
+    const end=en?'Ends':'Inaisha';
+    const duration=durations[level]||'—';
+    const nameLine=`<a href="tg://user?id=${Number(row.user_id)}">${escapeHtml(name)}</a>`;
+    const body=`${title}\n\n${name}\n${reason}\n${label}: ${level}/5 · ${duration}\n${end}: ${expiry(row.until_date,language)}\n\n${summary}\n${next}`;
+    const extra=settings[`notice_${en?'en':'sw'}`];
+    const custom=extra?'\n\n'+fillTemplate(extra,{user:name,reason,duration,group:message.chat?.title||'Group'},800):'';
+    const rich=`<b>${title}</b>\n\n${nameLine}\n${escapeHtml(reason)}\n<b>${label}:</b> ${level}/5 · ${duration}\n<b>${end}:</b> ${escapeHtml(expiry(row.until_date,language))}\n\n${escapeHtml(summary)}\n${escapeHtml(next)}${escapeHtml(custom)}`;
+    return {rich:`${rich}\n\n${FOOTER_RICH}`,plain:`${body}${custom}\n\n${FOOTER_PLAIN}`};
   }
   const reasons=JSON.parse(row.reasons).map(reason=>reason==='forward' ? (en ? 'Forwarded messages are not allowed.' : 'Ujumbe wa forward hauruhusiwi.') : (en ? 'The posted link is not allowed.' : 'Link iliyotumwa hairuhusiwi.'));
   const duration=row.strike===1 ? (en ? '24 hours' : 'Saa 24') : row.strike===2 ? (en ? '7 days' : 'Siku 7') : (en ? 'Permanent' : 'Kudumu');

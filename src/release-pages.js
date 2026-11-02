@@ -14,7 +14,7 @@ const COPY = {
     developerTitle: 'Build around your community.', developerDescription: 'Use the SautiLink Pilot group API to read approved knowledge, read events and create announcement drafts for admin review.',
     release: 'Community care', date: '22 October 2026', available: 'Release notes',
     updateIntro: 'Connect a group with clear next steps, test its rules, plan events and help members privately. Each group chooses its tools and whether to appear in the public directory.',
-    policyTitle: 'Your group’s rules stay in place.', policyText: 'Admins and the linked channel keep their exemptions. The first prohibited link receives a tagged warning without a ban strike. Repeated links and forwards without a prohibited link use the 24-hour, 7-day and permanent ban sequence. Command spam removal remains delete-only.',
+    policyTitle: 'Your group’s rules stay in place.', policyText: 'Admins and the linked channel keep their exemptions. The first prohibited link receives a tagged warning. Later links cause no-post restrictions for 1h, 12h, 24h, 3d, 7d; then bans for 24h, 7d and permanently. Forwards without a prohibited link retain the old ban sequence. Command spam removal remains delete-only.',
     updateCards: [
       ['check', 'Guided connection and setup checks', 'Use /connect privately to choose a group. Current admins can open /doctor for its permissions and readiness checklist, with steps to address anything missing.'],
       ['shield', 'Try your rules safely', 'Admins can use /policytest to try sample messages against their group’s settings. Testing does not delete messages, ban members or add strikes.'],
@@ -85,7 +85,7 @@ const COPY = {
     developerTitle: 'Unganisha zana za community yako.', developerDescription: 'Tumia API ya SautiLink Pilot kusoma majibu yaliyoidhinishwa, kusoma matukio na kuunda rasimu za matangazo kwa mapitio ya admins.',
     release: 'Utunzaji wa jumuiya', date: '22 Oktoba 2026', available: 'Taarifa za maboresho',
     updateIntro: 'Unganisha group kwa hatua zinazoeleweka, jaribu sheria, panga matukio na saidia members faraghani. Kila group linachagua zana zake na kama litaonekana kwenye orodha ya umma.',
-    policyTitle: 'Kanuni za group lako zinaendelea kuheshimiwa.', policyText: 'Admins na channel iliyo linked wanaendelea kuheshimiwa. Link ya kwanza isiyoruhusiwa hupata onyo lenye tag bila kosa la ban. Links zinazofuata na forwards bila link iliyokatazwa hufuata ban ya saa 24, siku 7 na permanent. Spam ya commands inaendelea kufutwa tu.',
+    policyTitle: 'Kanuni za group lako zinaendelea kuheshimiwa.', policyText: 'Admins na channel iliyo linked wanaendelea kuheshimiwa. Link ya kwanza isiyoruhusiwa hupata onyo lenye tag. Links zinazofuata huleta restrictions za kutopost saa 1, 12, 24, siku 3, 7; kisha bans saa 24, siku 7 na permanent. Forwards bila link iliyokatazwa huendelea na bans zilizopo. Spam ya commands inaendelea kufutwa tu.',
     updateCards: [
       ['check', 'Kuunganisha group na kukagua utayari', 'Tumia /connect faraghani kuchagua group. Admin wa sasa anaweza kufungua /doctor kuona ruhusa na ukaguzi wa utayari, pamoja na hatua za kukamilisha kilichokosekana.'],
       ['shield', 'Jaribu sheria bila kuchukua hatua', 'Admin anaweza kutumia /policytest kukagua ujumbe wa mfano kwa mipangilio ya group lake. Jaribio halifuti ujumbe, halitoi ban wala kuongeza kosa.'],

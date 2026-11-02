@@ -53,6 +53,11 @@ class FakeTelegram {
           { status: 'administrator', user: { id: BOT_ID, is_bot: true }, can_delete_messages: true, can_restrict_members: true },
           ...Array.from(this.members.entries()).filter(([key, member]) => key.startsWith(`${params.chat_id}:`) && ['creator', 'administrator'].includes(member.status)).map(([, member]) => member),
         ];
+      case 'restrictChatMember':
+        this.member(params.chat_id,params.user_id,'restricted',{
+          is_member:true,until_date:params.until_date,can_send_messages:false
+        });
+        return true;
       case 'banChatMember':
         this.member(params.chat_id, params.user_id, 'kicked', { until_date: params.until_date ?? 0 });
         return true;
@@ -78,6 +83,12 @@ async function fixture(t,{fresh=false}={}) {
   let updateId = 1;
   let messageId = 1;
   const moderator = createModerator({ db, api, clock: () => now });
+  // Existing ban-path tests represent a member who already completed the
+  // five restriction stages. Separate restriction-ladder tests cover new users.
+  if(!fresh) for(const chat of [GROUP,OTHER_GROUP]) {
+    await db.prepare('INSERT OR REPLACE INTO member_restrictions(chat_id,user_id,level,until_date) VALUES(?,?,5,0)')
+      .bind(String(chat),String(USER_ID)).run();
+  }
   // Ban-path regressions require a durably delivered prior warning. Fresh
   // journeys below and in link-warning.test.js start with no warning ledger.
   if(!fresh) for (const chat of [GROUP, OTHER_GROUP]) {
@@ -329,8 +340,9 @@ test('an authorized admin can forgive strikes and pause/resume this group', asyn
     .bind(String(GROUP), String(USER_ID)).first()).strikes, 0);
   f.advance(1);
   await f.moderator.handle(f.message());
-  assert.equal(f.api.callsOf('banChatMember').length, 2);
-  assert.equal(f.api.callsOf('banChatMember')[1].params.until_date, f.now() + 86400);
+  assert.equal(f.api.callsOf('banChatMember').length, 1);
+  assert.equal(f.api.callsOf('restrictChatMember').length, 1);
+  assert.equal(f.api.callsOf('restrictChatMember')[0].params.until_date, f.now() + 3600);
 });
 
 test('failure to verify administrator status defers destructive actions', async (t) => {
@@ -709,8 +721,10 @@ test('new member first forbidden link is deleted, tagged and warned without incr
   assert.equal((await f.db.prepare('SELECT status FROM notification_delivery WHERE incident_id=?').bind(incident.id).first()).status,'sent');
 });
 
-test('fresh member follows warning then 24h then 7d then permanent for repeated forbidden links',async t=>{
+test('member completing five restrictions retains ban 24h then 7d then permanent after warning',async t=>{
   const f=await fixture(t,{fresh:true});
+  await f.db.prepare('INSERT INTO member_restrictions(chat_id,user_id,level) VALUES(?,?,5)')
+    .bind(String(GROUP),String(USER_ID)).run();
   await f.moderator.handle(f.message());
   assert.equal(f.api.callsOf('banChatMember').length,0);
   f.advance(2);
@@ -795,7 +809,8 @@ test('a lost warning response never spams the group or converts a replay to a ba
   assert.ok((await createStore(f.db).linkWarning(GROUP,USER_ID)).delivered_at);
   f.advance(2);
   await f.moderator.handle(f.message());
-  assert.equal(f.api.callsOf('banChatMember').length,1);
+  assert.equal(f.api.callsOf('restrictChatMember').length,1);
+  assert.equal(f.api.callsOf('banChatMember').length,0);
 });
 
 test('warning mentions gracefully degrade to plain text when Telegram rejects HTML',async t=>{
@@ -842,9 +857,10 @@ test('two distinct forbidden links in the warning-delivery second are deleted be
   assert.equal((await createStore(f.db).member(GROUP,USER_ID)).strikes,0);
   f.advance(2);
   await f.moderator.handle(f.message());
-  assert.equal(f.api.callsOf('banChatMember').length,1);
-  assert.equal(f.api.callsOf('banChatMember')[0].params.until_date,f.now()+86400);
-  assert.equal((await createStore(f.db).member(GROUP,USER_ID)).strikes,1);
+  assert.equal(f.api.callsOf('restrictChatMember').length,1);
+  assert.equal(f.api.callsOf('restrictChatMember')[0].params.until_date,f.now()+3600);
+  assert.equal((await createStore(f.db).member(GROUP,USER_ID)).strikes,0);
+  assert.equal((await createStore(f.db).restriction(GROUP,USER_ID)).level,1);
 });
 test('approved link gets no warning and a later unapproved link still gets first warning',async t=>{
   const f=await fixture(t,{fresh:true});

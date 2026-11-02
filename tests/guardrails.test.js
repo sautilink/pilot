@@ -25,6 +25,10 @@ async function fixture(t,settings={}) {
     return true;
   }};
   const store=createStore(db),controlStore=createControlStore(db),clock=()=>now;
+  // Existing guardrail tests run with the restriction ladder already complete
+  // so their ban-path assertions keep their original meaning.
+  await db.prepare('INSERT INTO member_restrictions(chat_id,user_id,level) VALUES(?,?,5)')
+    .bind(String(GROUP),String(USER)).run();
   await store.group(GROUP);await store.settings({ready:'1',ready_since:START-1});
   await controlStore.ensure();
   const configure=async(value,chat=GROUP)=>db.prepare('INSERT INTO pilot_group_settings VALUES(?,?,?) ON CONFLICT(chat_id) DO UPDATE SET settings_json=excluded.settings_json,updated_at=excluded.updated_at').bind(String(chat),JSON.stringify(value),now).run();

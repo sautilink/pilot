@@ -14,6 +14,12 @@ const forward = { type: 'hidden_user', date: START - 1, sender_user_name: 'Origi
 async function fixture(t) {
   const db = new TestD1(); await applySchema(db); t.after(() => db.close());
   const store = createStore(db), calls = [], members = new Map(), hooks = new Map();
+  // Legacy link-warning regression tests focus on warning delivery and the
+  // old ban ladder once restrictions 5/5 have already been completed.
+  for(const chat of [GROUP,OTHER_GROUP]) {
+    await db.prepare('INSERT INTO member_restrictions(chat_id,user_id,level) VALUES(?,?,5)')
+      .bind(String(chat),String(USER)).run();
+  }
   let now = START, update = 0, message = 0, nextMessage = 5000;
   const member = (chat, user, status = 'member', extra = {}) => {
     const value = { status, user: { id: user, first_name: 'Juma' }, ...extra };
@@ -72,7 +78,7 @@ test('fresh prohibited link is deleted, durably warned and tagged without any ba
   assert.equal(atSend.state.strikes, 0); assert.equal(atSend.state.active_until, 0); assert.equal(atSend.state.episode_at, 0);
   const notice = f.callsOf('sendMessage')[0].params;
   assert.match(notice.text, /tg:\/\/user\?id=101/); assert.match(notice.text, /&lt;Juma &amp; Sana&gt;/);
-  assert.match(notice.text, /onyo|warning/i); assert.match(notice.text, /ukirudia|ukituma tena|repeat/i);
+  assert.match(notice.text, /onyo|warning/i); assert.match(notice.text, /links zinazofuata|further prohibited links|ukirudia|repeat/i);
   assert.doesNotMatch(notice.text, /MEMBER AMEFUNGIWA|MEMBER BANNED|Ban ya kudumu/);
   assert.ok(f.calls.findIndex(call => call.method === 'deleteMessage') < f.calls.findIndex(call => call.method === 'sendMessage'));
 });

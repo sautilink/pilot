@@ -35,7 +35,7 @@ const copy = {
     strikesUsage: 'Tumia <code>/strikes USER_ID</code> kwa ID ya mtumiaji katika group ulilochagua.',
     bancheckUsage: 'Tumia <code>/bancheck USER_ID</code> kupata hali ya member mmoja bila kubadilisha ban.',
     strikes: 'Mtumiaji <code>{user}</code>: makosa ya ban {strikes} kati ya 3 katika group hili.\nOnyo la link: {warning}.',
-    warningDelivered: 'kutumwa kumethibitishwa; link inayofuata isiyoruhusiwa itafuata kiwango cha ban',
+    warningDelivered: 'kutumwa kumethibitishwa; link inayofuata isiyoruhusiwa huanzisha restriction ya saa 1, kisha hatua nyingine hadi 5/5 kabla ya bans',
     warningPending: 'limeandikwa lakini kutumwa hakujathibitishwa; links zinazofuata zitafutwa na kukumbushwa bila kosa la ban',
     warningDue: 'bado; link ya kwanza isiyoruhusiwa itapata onyo bila kuongeza kosa',
     group: 'Group lako',
@@ -63,7 +63,7 @@ const copy = {
     strikesUsage: 'Use <code>/strikes USER_ID</code> for a member of the group you selected.',
     bancheckUsage: 'Use <code>/bancheck USER_ID</code> to inspect one member without changing their ban.',
     strikes: 'Member <code>{user}</code>: {strikes} of 3 ban strikes in this group.\nLink warning: {warning}.',
-    warningDelivered: 'delivery confirmed; the next prohibited link follows the ban sequence',
+    warningDelivered: 'delivery confirmed; the next prohibited link starts a 1-hour no-post restriction, then escalates to 5/5 before bans',
     warningPending: 'recorded, delivery unconfirmed; later links are deleted with a reminder without a ban strike',
     warningDue: 'still due; the first prohibited link receives a warning without a strike',
     group: 'Your group',
@@ -425,7 +425,8 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
         } else {
           const state = await store.member(choice.chat.id, argument);
           const warning = await store.linkWarning(choice.chat.id, argument);
-          await quietSend(message.chat.id, `<b>${escapeHtml(choice.chat.title || textFor(language, 'group'))}</b>\n${textFor(language, 'strikes', { user: Number(argument), strikes: state.strikes, warning: textFor(language, warning?.delivered_at ? 'warningDelivered' : warning ? 'warningPending' : 'warningDue') })}`, { reply_markup: renderBotPage('admin', { groupId: choice.chat.id, language }).reply_markup });
+          const restriction = await store.restriction(choice.chat.id,argument);
+          await quietSend(message.chat.id, `<b>${escapeHtml(choice.chat.title || textFor(language, 'group'))}</b>\n${textFor(language, 'strikes', { user: Number(argument), strikes: state.strikes, warning: textFor(language, warning?.delivered_at ? 'warningDelivered' : warning ? 'warningPending' : 'warningDue') })}\n${language==='en'?'No-post restriction stage: ':'Hatua ya restriction ya kutopost: '}${restriction.level}/5.`, { reply_markup: renderBotPage('admin', { groupId: choice.chat.id, language }).reply_markup });
         }
       } else {
         await quietSend(message.chat.id, textFor(language, 'readOnly', { command }), { reply_markup: renderBotPage('admin', { groupId: choice.chat.id, language }).reply_markup });
@@ -520,7 +521,8 @@ export function createBotExperience({ db, store, api, clock = () => Math.floor(D
     const state = await store.member(chat, target);
     if (command === 'strikes') {
       const warning = await store.linkWarning(chat, target);
-      await privateReply(message, bot, `<b>${escapeHtml(message.chat.title || textFor(personalLanguage, 'group'))}</b>\n${textFor(personalLanguage, 'strikes', { user: Number(target), strikes: state.strikes, warning: textFor(personalLanguage, warning?.delivered_at ? 'warningDelivered' : warning ? 'warningPending' : 'warningDue') })}`, language);
+      const restriction = await store.restriction(chat,target);
+      await privateReply(message, bot, `<b>${escapeHtml(message.chat.title || textFor(personalLanguage, 'group'))}</b>\n${textFor(personalLanguage, 'strikes', { user: Number(target), strikes: state.strikes, warning: textFor(personalLanguage, warning?.delivered_at ? 'warningDelivered' : warning ? 'warningPending' : 'warningDue') })}\n${personalLanguage==='en'?'No-post restriction stage: ':'Hatua ya restriction ya kutopost: '}${restriction.level}/5.`, language);
       return true;
     }
     if (!Number.isSafeInteger(updateId)) return true;

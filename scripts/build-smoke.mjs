@@ -151,15 +151,25 @@ try {
       h.finish();
       checkTheme(h, label);
       if (path === '/') {
-        h.document.getElementById('sim-run').dispatch('click');
-        assert.equal(h.document.getElementById('sim-count').textContent, '0 / 3', `${label}: first link adds no ban strike`);
-        assert.equal(h.document.getElementById('sim-outcome-title').textContent, 'Link warning. No ban.', `${label}: first link warns`);
-        assert.match(h.document.getElementById('sim-announcement').textContent, /@Juma.*another prohibited link will trigger a ban/, `${label}: warning tags the member and explains repetition`);
-        h.document.getElementById('sim-run').dispatch('click');
-        assert.equal(h.document.getElementById('sim-count').textContent, '1 / 3', `${label}: next link adds the first ban strike`);
-        assert.equal(h.document.getElementById('sim-outcome-title').textContent, 'Banned for 24 hours.', `${label}: next link starts the timed ban progression`);
+        const run = () => h.document.getElementById('sim-run').dispatch('click');
+        const count = () => h.document.getElementById('sim-count').textContent;
+        const title = () => h.document.getElementById('sim-outcome-title').textContent;
+        run();
+        assert.equal(count(), 'Restriction 0/5 · Ban 0/3', `${label}: warning adds no strike`);
+        assert.equal(title(), 'Link warning. No ban.', `${label}: first link warns`);
+        assert.match(h.document.getElementById('sim-announcement').textContent, /@Juma.*one-hour no-post restriction/, `${label}: warning describes next restriction`);
+        for (const [level, duration] of [[1, '1 hour'], [2, '12 hours'], [3, '24 hours'], [4, '3 days'], [5, '7 days']]) {
+          run();
+          assert.equal(count(), `Restriction ${level}/5 · Ban 0/3`, `${label}: restriction ${level}/5`);
+          assert.equal(title(), `No-post restriction: ${duration}`, `${label}: restriction duration`);
+        }
+        for (const [level, heading] of [[1, 'Banned for 24 hours.'], [2, 'Banned for 7 days.'], [3, 'Permanent ban.']]) {
+          run();
+          assert.equal(title(), heading, `${label}: ban stage ${level}`);
+          assert.equal(count(), `Restriction 5/5 · Ban ${level}/3`, `${label}: ban progression`);
+        }
         h.document.getElementById('sim-reset').dispatch('click');
-        assert.equal(h.document.getElementById('sim-count').textContent, '0 / 3');
+        assert.equal(count(), 'Restriction 0/5 · Ban 0/3', `${label}: reset full ladder`);
       } else if (path === '/setup') {
         h.document.getElementById('generate-key').dispatch('click');
         assert.match(h.document.getElementById('generated-key').value, /^[a-f0-9]{64}$/, `${label}: browser key generation works`);

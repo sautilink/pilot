@@ -232,6 +232,20 @@ export function analyzeMessage(message, rules = []) {
   return { reasons, blockedLinks };
 }
 
+// Five graduated read-only restrictions, followed by existing ban strikes.
+// These durations are all within Telegram's temporary restriction window.
+export const RESTRICTION_DURATIONS = Object.freeze([3600,43200,86400,259200,604800]);
+export function restrictionDuration(level) {
+  if (!Number.isSafeInteger(level) || level<1 || level>5) throw new RangeError('Invalid restriction level');
+  return RESTRICTION_DURATIONS[level-1];
+}
+export const NO_POST_PERMISSIONS = Object.freeze({
+  can_send_messages:false,can_send_audios:false,can_send_documents:false,
+  can_send_photos:false,can_send_videos:false,can_send_video_notes:false,
+  can_send_voice_notes:false,can_send_polls:false,can_send_other_messages:false,
+  can_add_web_page_previews:false
+});
+
 /** Zero means a permanent ban, never a zero-length temporary ban. */
 export function banDuration(strike) {
   if (!Number.isSafeInteger(strike) || strike < 1) throw new RangeError("Strike count must be a positive integer");
