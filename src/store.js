@@ -113,6 +113,23 @@ export function createStore(db) {
       return results.at(-1).results[0] || null;
     },
     status(id,status) { return run('UPDATE incidents SET status=? WHERE id=?',status,id); },
+    async confirmWarning(row,now) {
+      // A link-only warning is a durable incident with strike=0. It must not
+      // increment strikes or start a Telegram ban. The coordinator serializes
+      // this with subsequent messages; the WHERE guard protects older updates.
+      const result=await db.batch([
+        db.prepare(`UPDATE members SET last_incident=?,episode_at=?,active_until=0
+          WHERE chat_id=? AND user_id=? AND strikes=0 AND last_incident IS NULL
+            AND override_at<?`)
+          .bind(row.id,row.event_at,String(row.chat_id),String(row.user_id),row.event_at),
+        db.prepare(`UPDATE incidents SET status='warned' WHERE id=? AND strike=0
+          AND status='planned' AND EXISTS (
+            SELECT 1 FROM members WHERE chat_id=? AND user_id=?
+              AND last_incident=? AND override_at<?)`)
+          .bind(row.id,String(row.chat_id),String(row.user_id),row.id,row.event_at)
+      ]);
+      return (result.at(-1)?.meta?.changes ?? result.at(-1)?.changes ?? 0)>0;
+    },
     async confirm(row,now) {
       const statements=[];
       if(/^[1-9]\d*$/.test(String(row.user_id)) && Number.isSafeInteger(Number(row.user_id))) {
