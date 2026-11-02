@@ -121,7 +121,7 @@ test('new violations while restriction is active are deleted without advancing t
   assert.equal((await f.getRestriction()).level,level);
 });
 
-test('forward-only and legacy ban strikes retain their previous escalation',async t=>{
+test('forward-only preserves existing ban sequence; legacy link violations use restrictions',async t=>{
   const f=await fixture(t);
   await f.moderator.handle(f.send({text:'plain forward',forward_origin:{type:'hidden_user',date:START-1}}));
   assert.equal(f.callsOf('banChatMember').length,1);
@@ -133,8 +133,11 @@ test('forward-only and legacy ban strikes retain their previous escalation',asyn
   await g.moderator.handle(g.send()); // introductory warning still applies
   g.advance(2);
   await g.moderator.handle(g.send());
-  assert.equal(g.callsOf('restrictChatMember').length,0);
-  assert.equal(g.callsOf('banChatMember').at(-1).params.until_date,g.now()+604800);
+  assert.equal(g.callsOf('restrictChatMember').length,1);
+  assert.equal(g.callsOf('restrictChatMember')[0].params.until_date,g.now()+3600);
+  assert.equal(g.callsOf('banChatMember').length,0);
+  assert.equal((await g.store.member(GROUP,USER)).strikes,1);
+  assert.equal((await g.getRestriction()).level,1);
 });
 
 test('definite restriction rejection does not increment level or announce success',async t=>{
@@ -195,4 +198,115 @@ test('lost response after Telegram actually restricted user safely reconciles wi
   const again=await f.moderator.handle(structuredClone(update));
   assert.equal(again.status,'duplicate');
   assert.equal(f.callsOf('restrictChatMember').length,1);
+});
+
+async function seedLegacyBan(f,level) {
+  const eventAt=START-20*86400;
+  const row=await f.store.plan({
+    id:'legacy-ban-'+level,chat_id:GROUP,user_id:USER,message_id:900+level,
+    event_at:eventAt,created_at:eventAt,strike:level,
+    until_date:eventAt+(level===1?86400:604800),reasons:'["link"]'
+  });
+  await f.store.confirm(row,eventAt);
+  assert.equal((await f.store.member(GROUP,USER)).strikes,level);
+}
+
+test('existing 1/3 ban history starts with a warning then restriction 1/5, never another ban',async t=>{
+  const f=await fixture(t);
+  await seedLegacyBan(f,1);
+  const first=await f.moderator.handle(f.send());
+  assert.equal(first.status,'warned');
+  assert.equal(f.callsOf('banChatMember').length,0);
+  assert.equal(f.callsOf('restrictChatMember').length,0);
+  assert.equal((await f.store.member(GROUP,USER)).strikes,1);
+  f.advance(3);
+  const second=await f.moderator.handle(f.send());
+  assert.equal(second.status,'restricted');
+  assert.equal(f.callsOf('restrictChatMember').length,1);
+  assert.equal(f.callsOf('restrictChatMember')[0].params.until_date,f.now()+3600);
+  assert.equal(f.callsOf('banChatMember').length,0);
+  assert.equal((await f.getRestriction()).level,1);
+  assert.equal((await f.store.member(GROUP,USER)).strikes,1);
+  assert.match(f.callsOf('sendMessage').at(-1).params.text,/1\/5/);
+});
+
+test('existing 2/3 ban history must complete five restrictions before the next ban',async t=>{
+  const f=await fixture(t);
+  await seedLegacyBan(f,2);
+  await f.moderator.handle(f.send());
+  for(let level=1;level<=5;level++) {
+    f.advance(level===1?3:restrictionDuration(level-1)+3);
+    assert.equal((await f.moderator.handle(f.send())).status,'restricted');
+    assert.equal(f.callsOf('restrictChatMember').length,level);
+    assert.equal((await f.getRestriction()).level,level);
+    assert.equal((await f.store.member(GROUP,USER)).strikes,2);
+    assert.equal(f.callsOf('banChatMember').length,0);
+  }
+  f.advance(restrictionDuration(5)+3);
+  assert.equal((await f.moderator.handle(f.send())).status,'confirmed');
+  assert.equal(f.callsOf('banChatMember').length,1);
+  assert.equal(f.callsOf('banChatMember')[0].params.until_date,0);
+  assert.equal((await f.store.member(GROUP,USER)).strikes,3);
+});
+
+test('a member with historic strikes and a previously delivered warning starts at restriction 1/5',async t=>{
+  const f=await fixture(t);
+  await seedLegacyBan(f,1);
+  const initial=f.send();
+  await f.moderator.handle(initial);
+  f.advance(3);
+  const check=await f.moderator.handle(f.send());
+  assert.equal(check.status,'restricted');
+  assert.equal(f.callsOf('banChatMember').length,0);
+  assert.equal((await f.getRestriction()).level,1);
+});
+
+test('queued legacy ban plan is reclassified before Telegram is asked to punish member',async t=>{
+  const f=await fixture(t);
+  await seedLegacyBan(f,1);
+  await f.moderator.handle(f.send());
+  f.advance(4);
+  const pending=f.send();
+  const id=`${GROUP}:message:${pending.message.message_id}`;
+  await f.store.plan({
+    id,chat_id:GROUP,user_id:USER,message_id:pending.message.message_id,
+    event_at:pending.message.date,created_at:f.now(),strike:2,
+    until_date:f.now()+604800,reasons:'["link"]'
+  });
+  const action=await f.moderator.handle(pending);
+  assert.equal(action.status,'restricted');
+  const row=await f.store.incident(id);
+  assert.equal(row.strike,-1);
+  assert.equal(row.status,'restricted');
+  assert.equal(f.callsOf('restrictChatMember').length,1);
+  assert.equal(f.callsOf('banChatMember').length,0);
+  assert.equal((await f.store.member(GROUP,USER)).strikes,1);
+});
+
+test('already active legacy ban is not lifted or converted to a restriction',async t=>{
+  const f=await fixture(t);
+  await f.store.member(GROUP,USER);
+  const ban=await f.store.plan({
+    id:'active-legacy',chat_id:GROUP,user_id:USER,message_id:991,
+    event_at:START-5,created_at:START-5,strike:1,
+    until_date:START+86400,reasons:'["link"]'
+  });
+  await f.store.confirm(ban,START-5);
+  f.members.set(`${GROUP}:${USER}`,{status:'kicked',user:{id:USER},until_date:START+86400});
+  const result=await f.moderator.handle(f.send());
+  assert.notEqual(result.status,'restricted');
+  assert.equal(f.callsOf('restrictChatMember').length,0);
+  assert.equal(f.callsOf('unbanChatMember').length,0);
+  assert.equal((await f.store.member(GROUP,USER)).strikes,1);
+});
+
+test('forward-only after legacy ban still follows the existing ban strike escalation',async t=>{
+  const f=await fixture(t);
+  await seedLegacyBan(f,1);
+  const result=await f.moderator.handle(f.send({text:'plain forwarded text',forward_origin:{type:'hidden_user',date:START-100}}));
+  assert.equal(result.status,'confirmed');
+  assert.equal(f.callsOf('restrictChatMember').length,0);
+  assert.equal(f.callsOf('banChatMember').length,1);
+  assert.equal(f.callsOf('banChatMember')[0].params.until_date,f.now()+604800);
+  assert.equal((await f.store.member(GROUP,USER)).strikes,2);
 });
