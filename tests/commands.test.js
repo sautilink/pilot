@@ -659,3 +659,32 @@ test('public integration guidance uses hosted documentation and admin tools stay
     assert.doesNotMatch(renderBotPage('admin', { language }).text, /\/doctor|\/policytest/);
   }
 });
+
+test('status shows scheduled expiry sweep and pending count only to a verified admin',async t=>{
+  const f=await fixture(t);
+  const row=await f.store.plan({
+    id:'expired-for-diagnostics',chat_id:GROUP,user_id:TARGET,message_id:82,
+    event_at:NOW-86402,created_at:NOW-86402,strike:1,
+    until_date:NOW-1,reasons:'["link"]'
+  });
+  await f.store.confirm(row,NOW);
+  await f.store.settings({ban_expiry_last_scan_at:NOW});
+  await f.command(groupMessage('/status'));
+  const sw=sent(f).at(-1).params;
+  assert.equal(sw.chat_id,ADMIN);
+  assert.match(sw.text,/Ban za muda:/);
+  assert.match(sw.text,/Ban za Pilot zilizopita muda na bado zinasubiri: 1/);
+  assert.match(sw.text,/UTC/);
+  await f.store.setLanguage('user',ADMIN,'en',NOW);
+  await f.command(groupMessage('/status'));
+  const en=sent(f).at(-1).params;
+  assert.equal(en.chat_id,ADMIN);
+  assert.match(en.text,/Temporary bans:/);
+  assert.match(en.text,/Expired Pilot bans still pending: 1/);
+  assert.doesNotMatch(en.text,/expired-for-diagnostics/);
+  f.api.member(GROUP,ADMIN,'member');
+  await f.command(groupMessage('/status'));
+  const unauthorized=sent(f).at(-1).params;
+  assert.equal(unauthorized.chat_id,GROUP);
+  assert.doesNotMatch(unauthorized.text,/Expired Pilot bans|Temporary bans|Ban za Pilot zilizopita muda/);
+});
