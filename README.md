@@ -48,8 +48,12 @@ Only after **Restriction 5/5** do the original bans begin:
 Restrictions are implemented through Telegram `restrictChatMember`, never a
 ban. Telegram lifts posting restrictions after `until_date`; Pilot retains
 the attained level so that a new violation after expiry advances one level.
-Old strike history is preserved. Existing members with prior ban strikes retain
-their prior ban escalation; they do not get backdated restriction stages.
+Old ban strikes are preserved, but **they never skip the five new
+restrictions**. A member with an old 1/3 or 2/3 ban strike still starts with
+the link warning (unless it has already been delivered), followed by
+restriction 1/5 through 5/5. Once all five restrictions are complete,
+the next prohibited link resumes their preserved ban ladder (for example,
+old 1/3 becomes 2/3). No prior ban is automatically removed.
 `/forgive` explicitly resets the warning, restrictions and ban strikes for
 the specified group, without lifting any active Telegram punishment.
 
