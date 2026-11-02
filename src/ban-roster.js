@@ -1,4 +1,5 @@
 import { escapeHtml } from './policy.js';
+import { createStore } from './store.js';
 
 // Telegram has no API for enumerating all banned members. Never describe this
 // private, per-group list of Pilot-known users as the complete Telegram ban list.
@@ -81,20 +82,28 @@ export function createBanRoster({db, api, clock = () => Math.floor(Date.now() / 
   async function inspect(chatId,userId) {
     if (!validChat(chatId) || !validUser(userId)) return {invalid:true};
     const id=String(userId);
+    // The five restriction levels are deliberately separate from old ban
+    // strikes. Do not mistake last_incident=NULL for a clean record.
+    const ledger=await createStore(db).restriction(chatId,id);
+    const restriction={
+      level:Number(ledger.level||0),
+      until:Number(ledger.until_date||0),
+    };
     const member=await db.prepare(`SELECT m.strikes,m.active_until,m.override_at,
       m.last_incident,i.status AS incident_status,i.until_date AS incident_until
       FROM members m LEFT JOIN incidents i ON i.id=m.last_incident
       WHERE m.chat_id=? AND m.user_id=? LIMIT 1`)
       .bind(String(chatId),id).first();
-    if (!member || !member.last_incident) return {invalid:false,known:false,userId:Number(id)};
+    if ((!member || !member.last_incident) && restriction.level===0)
+      return {invalid:false,known:false,userId:Number(id)};
     const result={
-      invalid:false,known:true,userId:Number(id),
-      strikes:Number(member.strikes||0),
-      pilotUntil:Number(member.active_until||0),
-      incidentUntil:Number(member.incident_until||0),
-      incidentStatus:['confirmed','cancelled','failed','pending','planned','review'].includes(member.incident_status)
+      invalid:false,known:true,userId:Number(id),restriction,
+      strikes:Number(member?.strikes||0),
+      pilotUntil:Number(member?.active_until||0),
+      incidentUntil:Number(member?.incident_until||0),
+      incidentStatus:['confirmed','cancelled','failed','pending','planned','review'].includes(member?.incident_status)
         ? member.incident_status : 'unknown',
-      overrideAt:Number(member.override_at||0)
+      overrideAt:Number(member?.override_at||0)
     };
     try {
       const live=await api.call('getChatMember',{chat_id:Number(chatId),user_id:Number(id)});
@@ -104,6 +113,16 @@ export function createBanRoster({db, api, clock = () => Math.floor(Date.now() / 
         result.telegram={kind:'banned',until,
           matchesPilot:(result.pilotUntil===-1?until===0:until===result.pilotUntil),
           expired:until>0 && until<=clock()};
+      } else if (live?.status==='restricted') {
+        const until=Number(live.until_date);
+        if (!Number.isSafeInteger(until) || until<0) throw new Error('Malformed Telegram status');
+        result.telegram={
+          kind:'restricted',until,
+          isMember:live.is_member!==false,
+          canPost:live.can_send_messages===true,
+          matchesPilot:restriction.level>0 && restriction.until===until,
+          expired:until>0 && until<=clock()
+        };
       } else if (notBanned.has(live?.status)) result.telegram={
         kind:'not_banned',status:live.status
       };
@@ -187,11 +206,35 @@ export function formatBanCheck(result,{language='sw',groupTitle=''}={}) {
     when(pilot,language);
   lines.push(
     '',(en?'Pilot recorded ban':'Ban iliyorekodiwa na Pilot')+': '+recorded,
-    (en?'Strike history':'Historia ya makosa')+': '+result.strikes+'/3',
-    (en?'Last incident status':'Hali ya tukio la mwisho')+': '+result.incidentStatus
+    (en?'Ban strike history':'Historia ya makosa ya ban')+': '+result.strikes+'/3',
+    (en?'Last ban incident status':'Hali ya tukio la ban')+': '+result.incidentStatus
   );
+  const restriction=result.restriction||{level:0,until:0};
+  if(restriction.level>0) {
+    lines.push(
+      '',
+      (en?'Pilot no-post restriction stage: ':'Hatua ya Pilot ya kutopost: ')+restriction.level+'/5',
+      (en?'Recorded restriction expiry: ':'Mwisho wa restriction iliyorekodiwa: ')+when(restriction.until,language)
+    );
+  }
   const telegram=result.telegram||{kind:'unknown',reason:'unknown'};
-  if(telegram.kind==='banned'){
+  if(telegram.kind==='restricted') {
+    lines.push('',
+      en?'<b>Telegram: RESTRICTED</b>':'<b>Telegram: AMEWEKEWA RESTRICTION</b>',
+      (en?'Posting: ':'Kutuma ujumbe: ')+(telegram.canPost?(en?'allowed':'inaruhusiwa'):(en?'blocked':'kumezuiwa')),
+      (en?'Member remains in group: ':'Bado yupo group: ')+(telegram.isMember?(en?'yes':'ndiyo'):(en?'no':'hapana')),
+      (en?'Telegram restriction expiry: ':'Mwisho wa restriction Telegram: ')+
+        (telegram.until===0?(en?'no expiry reported':'hakuna mwisho uliotajwa'):when(telegram.until,language))
+    );
+    if(!telegram.matchesPilot) lines.push(
+      en?'Telegram restriction deadline differs from Pilot; an administrator may have changed it. Do not overwrite their decision.':
+        'Muda wa restriction ya Telegram unatofautiana na rekodi ya Pilot; huenda admin mwingine ameubadilisha. Usibadilishe uamuzi wake.'
+    );
+    if(telegram.expired) lines.push(
+      en?'Telegram reports a restriction after its recorded expiry; check member permissions.':
+        'Telegram bado inaonyesha restriction baada ya muda; kagua permissions za member.'
+    );
+  } else if(telegram.kind==='banned'){
     const actual=telegram.until===0?(en?'Permanent':'Kudumu'):when(telegram.until,language);
     lines.push('',en?'<b>Telegram: BANNED</b>':'<b>Telegram: BANNED</b>',actual);
     if(telegram.expired) lines.push(en?'Telegram still reports a ban after the deadline.':'Telegram bado inaonyesha ban hata baada ya muda kuisha.');
@@ -213,6 +256,8 @@ export function formatBanCheck(result,{language='sw',groupTitle=''}={}) {
     lines.push(en?'This is not proof of a current ban. Do not reset the record automatically.':'Huu si uthibitisho kuwa ban ipo. Usisafishe rekodi kwa makisio.');
     lines.push(en?'Recheck bot admin rights, retry this check, or ask the member to start @sautilinkpilotbot privately. An admin can separately decide to use /unban in the group.':'Kagua ruhusa za bot, rudia ukaguzi, au muombe member aanzishe @sautilinkpilotbot faraghani. Admin anaweza kuamua tofauti kutumia /unban ndani ya group.');
   }
-  lines.push('',en?'Read-only diagnostic. No bans or strikes were changed.':'Huu ni ukaguzi tu. Hakuna ban au makosa yaliyobadilishwa.');
+  lines.push('',
+    en?'Read-only diagnostic. No bans, restrictions, or strikes were changed.':
+       'Huu ni ukaguzi tu. Hakuna ban, restriction wala makosa yaliyobadilishwa.');
   return lines.join('\n');
 }
