@@ -335,8 +335,9 @@ test('an authorized admin can forgive strikes and pause/resume this group', asyn
     .bind(String(GROUP), String(USER_ID)).first()).strikes, 0);
   f.advance(1);
   await f.moderator.handle(f.message());
-  assert.equal(f.api.callsOf('banChatMember').length, 2);
-  assert.equal(f.api.callsOf('banChatMember')[1].params.until_date, f.now() + 86400);
+  assert.equal(f.api.callsOf('banChatMember').length, 1);
+  assert.equal(f.api.callsOf('restrictChatMember').length, 1);
+  assert.equal(f.api.callsOf('restrictChatMember')[0].params.until_date, f.now() + 3600);
 });
 
 test('failure to verify administrator status defers destructive actions', async (t) => {
@@ -715,8 +716,10 @@ test('new member first forbidden link is deleted, tagged and warned without incr
   assert.equal((await f.db.prepare('SELECT status FROM notification_delivery WHERE incident_id=?').bind(incident.id).first()).status,'sent');
 });
 
-test('fresh member follows warning then 24h then 7d then permanent for repeated forbidden links',async t=>{
+test('member completing five restrictions retains ban 24h then 7d then permanent after warning',async t=>{
   const f=await fixture(t,{fresh:true});
+  await f.db.prepare('INSERT INTO member_restrictions(chat_id,user_id,level) VALUES(?,?,5)')
+    .bind(String(GROUP),String(USER_ID)).run();
   await f.moderator.handle(f.message());
   assert.equal(f.api.callsOf('banChatMember').length,0);
   f.advance(2);
@@ -801,7 +804,8 @@ test('a lost warning response never spams the group or converts a replay to a ba
   assert.ok((await createStore(f.db).linkWarning(GROUP,USER_ID)).delivered_at);
   f.advance(2);
   await f.moderator.handle(f.message());
-  assert.equal(f.api.callsOf('banChatMember').length,1);
+  assert.equal(f.api.callsOf('restrictChatMember').length,1);
+  assert.equal(f.api.callsOf('banChatMember').length,0);
 });
 
 test('warning mentions gracefully degrade to plain text when Telegram rejects HTML',async t=>{
@@ -848,9 +852,10 @@ test('two distinct forbidden links in the warning-delivery second are deleted be
   assert.equal((await createStore(f.db).member(GROUP,USER_ID)).strikes,0);
   f.advance(2);
   await f.moderator.handle(f.message());
-  assert.equal(f.api.callsOf('banChatMember').length,1);
-  assert.equal(f.api.callsOf('banChatMember')[0].params.until_date,f.now()+86400);
-  assert.equal((await createStore(f.db).member(GROUP,USER_ID)).strikes,1);
+  assert.equal(f.api.callsOf('restrictChatMember').length,1);
+  assert.equal(f.api.callsOf('restrictChatMember')[0].params.until_date,f.now()+3600);
+  assert.equal((await createStore(f.db).member(GROUP,USER_ID)).strikes,0);
+  assert.equal((await createStore(f.db).restriction(GROUP,USER_ID)).level,1);
 });
 test('approved link gets no warning and a later unapproved link still gets first warning',async t=>{
   const f=await fixture(t,{fresh:true});
