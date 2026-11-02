@@ -78,6 +78,12 @@ async function fixture(t,{fresh=false}={}) {
   let updateId = 1;
   let messageId = 1;
   const moderator = createModerator({ db, api, clock: () => now });
+  // Existing ban-path tests represent a member who already completed the
+  // five restriction stages. Separate restriction-ladder tests cover new users.
+  if(!fresh) for(const chat of [GROUP,OTHER_GROUP]) {
+    await db.prepare('INSERT OR REPLACE INTO member_restrictions(chat_id,user_id,level,until_date) VALUES(?,?,5,0)')
+      .bind(String(chat),String(USER_ID)).run();
+  }
   // Ban-path regressions require a durably delivered prior warning. Fresh
   // journeys below and in link-warning.test.js start with no warning ledger.
   if(!fresh) for (const chat of [GROUP, OTHER_GROUP]) {
