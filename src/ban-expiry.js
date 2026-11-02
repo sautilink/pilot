@@ -24,7 +24,7 @@ export function createBanExpiry({db,api,clock=()=>Math.floor(Date.now()/1000)}) 
     const select=`SELECT DISTINCT m.chat_id ${DUE} AND m.chat_id>? ORDER BY m.chat_id LIMIT ?`;
     let groups=await rows(select,now,cursor,max);
     if(!groups.length && cursor) groups=await rows(select,now,'',max);
-    await store.settings({ban_expiry_group_cursor:groups.at(-1)?.chat_id || ''});
+    await store.settings({ban_expiry_group_cursor:groups.at(-1)?.chat_id || '',ban_expiry_last_scan_at:now});
     return groups.map(row=>row.chat_id).filter(validChat);
   }
 
@@ -85,5 +85,16 @@ export function createBanExpiry({db,api,clock=()=>Math.floor(Date.now()/1000)}) 
     }
     return {ok:true,checked:candidates.length,unbanned,alreadyReleased,conflicts,failed};
   }
-  return {dueGroups,expireGroup};
+  // Read-only admin diagnostic. Count only confirmed Pilot temporary bans,
+  // never human/permanent cases. This is not proof of actual Telegram access.
+  async function status(chatId) {
+    if(!validChat(chatId)) return {lastScanAt:0,pending:null};
+    const [lastScan, pending] = await Promise.all([
+      store.setting('ban_expiry_last_scan_at'),
+      db.prepare(`SELECT COUNT(*) AS count ${DUE} AND m.chat_id=?`)
+        .bind(clock(),String(chatId)).first(),
+    ]);
+    return {lastScanAt:Number(lastScan || 0),pending:Number(pending?.count || 0)};
+  }
+  return {dueGroups,expireGroup,status};
 }
