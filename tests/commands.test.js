@@ -847,3 +847,47 @@ test('private /bancheck checks fresh admin permissions and only the selected gro
   assert.equal(f.api.callsOf('getChatMember').filter(c=>c.params.user_id===TARGET).length,reads);
   assert.doesNotMatch(sent(f).at(-1).params.text,/Telegram: HAJABANIWA|103/);
 });
+
+
+test('Telegram user-not-found unban failure is explained privately with no D1 override or strike reset',async t=>{
+  const f=await fixture(t);
+  await f.store.member(GROUP,TARGET);
+  await f.store.run('UPDATE members SET strikes=2,active_until=? WHERE chat_id=? AND user_id=?',NOW+604800,String(GROUP),String(TARGET));
+  const secret='DO_NOT_SHOW_MY_TELEGRAM_TOKEN';
+  f.api.hooks.set('unbanChatMember',()=>{throw new TelegramError('Bad Request: user not found '+secret,400,false);});
+  const command=groupMessage(`/unban ${TARGET}`);
+  await f.command(command,902);
+  await f.command(command,902);
+  assert.equal(f.api.callsOf('unbanChatMember').length,1);
+  assert.equal(f.api.callsOf('unbanChatMember')[0].params.only_if_banned,true);
+  assert.equal(sent(f).length,1);
+  assert.equal(sent(f)[0].params.chat_id,ADMIN);
+  assert.match(sent(f)[0].params.text,/Telegram haiwezi kutambua ID/);
+  assert.match(sent(f)[0].params.text,/Removed Users\/Banned Users/);
+  assert.doesNotMatch(sent(f)[0].params.text,/DO_NOT_SHOW_MY_TELEGRAM_TOKEN/);
+  assert.equal((await f.store.member(GROUP,TARGET)).active_until,NOW+604800);
+  assert.equal((await f.store.member(GROUP,TARGET)).strikes,2);
+});
+test('permission failure is not misreported as a missing account and gives /doctor guidance',async t=>{
+  const f=await fixture(t);
+  await f.store.setLanguage('user',ADMIN,'en',NOW);
+  f.api.hooks.set('unbanChatMember',()=>{throw new TelegramError('Bad Request: not enough rights',400,false);});
+  await f.command(groupMessage(`/unban ${TARGET}`),903);
+  const result=sent(f).at(-1).params;
+  assert.equal(result.chat_id,ADMIN);
+  assert.match(result.text,/refused the bot permission/);
+  assert.match(result.text,/\/doctor/);
+  assert.doesNotMatch(result.text,/cannot resolve this user/);
+});
+test('lost Telegram unban response retains local state and never blindly retries the same command',async t=>{
+  const f=await fixture(t);
+  await f.store.member(GROUP,TARGET);
+  await f.store.run('UPDATE members SET strikes=1,active_until=? WHERE chat_id=? AND user_id=?',NOW+86400,String(GROUP),String(TARGET));
+  f.api.hooks.set('unbanChatMember',()=>{throw new TelegramError('Lost response',0,true);});
+  const cmd=groupMessage(`/unban ${TARGET}`);
+  await f.command(cmd,904);
+  await f.command(cmd,904);
+  assert.equal(f.api.callsOf('unbanChatMember').length,1);
+  assert.equal((await f.store.member(GROUP,TARGET)).active_until,NOW+86400);
+  assert.match(sent(f).at(-1).params.text,/haijathibitisha/);
+});
