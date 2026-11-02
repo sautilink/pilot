@@ -552,3 +552,24 @@ test('today statistics start at EAT midnight while week remains a rolling seven-
   assert.equal(overview.stats.today.incidents, 2);
   assert.equal(overview.stats.week.incidents, 3);
 });
+
+
+test('Mini App group discovery uses bounded parallel role verification without changing group order',async t=>{
+  const f=await fixture(t);
+  const chats=Array.from({length:8},(_,i)=>-1009000-i).sort((a,b)=>String(a).localeCompare(String(b)));
+  for(const chat of chats){
+    await f.control.rememberAdmin(ADMIN,chat,START);
+    f.api.setMember(chat,ADMIN,'administrator');
+  }
+  let active=0,peak=0;
+  f.api.hooks.set('getChatMember',async(params,self)=>{
+    active++;peak=Math.max(peak,active);
+    await Promise.resolve(); await Promise.resolve();
+    active--;
+    return self.members.get(String(params.chat_id)+':'+String(params.user_id))||{status:'left'};
+  });
+  const result=await f.query('groups');
+  assert.deepEqual(result.groups.map(x=>x.id),chats);
+  assert.ok(peak>=2,'independent groups should not block each other');
+  assert.ok(peak<=4,'Telegram reads must be bounded to avoid bursts');
+});
