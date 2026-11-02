@@ -734,3 +734,55 @@ test('saved private admin selection is freshly authorized before rendering /bans
   await f.command(privateMessage('/bans',ADMIN));
   assert.doesNotMatch(sent(f).at(-1).params.text,/103|Known bans|Ban zinazojulikana/);
 });
+
+
+test('group admin feature points to exact requested action instead of generic home',async t=>{
+  const f=await fixture(t);
+  await f.command(groupMessage('/settings'));
+  const reply=sent(f).at(-1).params;
+  assert.equal(reply.chat_id,GROUP);
+  const deep=reply.reply_markup.inline_keyboard[0][0].url;
+  assert.equal(deep,`https://t.me/sautilinkpilotbot?start=feature_settings_${GROUP}`);
+  assert.doesNotMatch(reply.text,/Moderation:|Private <group>|Matangazo:/);
+});
+
+test('verified private /start restores the requested admin action and Mini App tab',async t=>{
+  const f=await fixture(t);
+  const control={query:async ({chatId,view})=>{
+    assert.equal(String(chatId),String(GROUP));assert.equal(view,'overview');
+    return {group:{id:GROUP,title:'Verified group',type:'supergroup'},moderation:{enabled:true},settings:{},language:'sw'};
+  }};
+  const experience=createBotExperience({db:f.db,store:f.store,api:f.api,clock:()=>NOW,control});
+  await experience.handleCommand(privateMessage(`/start feature_settings_${GROUP}`,ADMIN),1001);
+  const reply=sent(f).at(-1).params;
+  assert.equal(reply.chat_id,ADMIN);
+  const web=reply.reply_markup.inline_keyboard[0][0].web_app.url;
+  assert.match(web,/\/app\?lang=sw/);
+  assert.match(web,/tab=settings/);
+  assert.match(web,new RegExp('group='+GROUP));
+  assert.match(reply.text,/Verified group/);
+});
+
+test('nonadmins cannot turn a forged action link into group disclosure',async t=>{
+  const f=await fixture(t);
+  await f.command(privateMessage(`/start feature_settings_${GROUP}`,USER));
+  const reply=sent(f).at(-1).params;
+  assert.equal(reply.chat_id,USER);
+  assert.doesNotMatch(reply.text,/Verified group|Moderation:|Matangazo:|Group ID:/);
+  assert.equal(f.api.callsOf('getChat').length,0);
+  assert.equal(await f.store.adminContext(USER),null);
+});
+
+test('member actions preserve checker and my-cases destinations across group-to-private hop',async t=>{
+  for(const [command,tab] of [['checklink','checker'],['mystatus','mycases'],['appeal','mycases']]){
+    const f=await fixture(t);
+    await f.command(groupMessage('/'+command,USER));
+    const first=sent(f).at(-1).params;
+    assert.equal(first.chat_id,GROUP);
+    assert.equal(first.reply_markup.inline_keyboard[0][0].url,`https://t.me/sautilinkpilotbot?start=feature_${command}`);
+    await f.command(privateMessage('/start feature_'+command,USER));
+    const second=sent(f).at(-1).params;
+    assert.equal(second.chat_id,USER);
+    assert.match(second.reply_markup.inline_keyboard[0][0].web_app.url,new RegExp('tab='+tab));
+  }
+});
