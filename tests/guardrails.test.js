@@ -26,6 +26,11 @@ async function fixture(t,settings={}) {
   }};
   const store=createStore(db),controlStore=createControlStore(db),clock=()=>now;
   await store.group(GROUP);await store.settings({ready:'1',ready_since:START-1});
+  // Ban regression cases use a member already given the one-time link
+  // education warning. Fresh-user warning coverage lives in moderator tests.
+  await store.member(GROUP,USER);
+  await store.run('UPDATE members SET last_incident=? WHERE chat_id=? AND user_id=?',
+    'previous-link-warning',String(GROUP),String(USER));
   await controlStore.ensure();
   const configure=async(value,chat=GROUP)=>db.prepare('INSERT INTO pilot_group_settings VALUES(?,?,?) ON CONFLICT(chat_id) DO UPDATE SET settings_json=excluded.settings_json,updated_at=excluded.updated_at').bind(String(chat),JSON.stringify(value),now).run();
   await configure(settings);
