@@ -26,32 +26,39 @@ hosting account or a copy of this repository.
 
 ## Moderation rules
 
-For an ordinary member, the first prohibited link in each group is removed and
-Pilot tags the member with a warning: another prohibited link will trigger a ban.
-This warning adds no strike. Bans for later prohibited links begin only after
-Telegram confirms warning delivery. If delivery fails or is unconfirmed, later
-distinct link messages are deleted with another warning reminder and no strike.
-After confirmed delivery, later prohibited links use the existing strike history
-and confirmed ban sequence:
+For an ordinary member, the first prohibited link in each group is removed
+and the member receives a tagged educational **warning** (no strike). After
+Telegram confirms warning delivery, further prohibited links progress through
+five **no-post restrictions**. The person stays in the supergroup and can read
+other people's posts, but cannot send messages or media during the restriction.
+Only after **Restriction 5/5** do the original bans begin:
 
-| Offense | Ban |
-| --- | --- |
-| First ban strike | 24 hours |
-| Second ban strike | 7 days |
-| Third and later ban strike | Permanent |
+| Stage | Action | Duration | Still a member? |
+| --- | --- | --- | --- |
+| Warning | Delete link and tag member | No timed penalty | Yes |
+| Restriction 1/5 | Prevent posting | 1 hour | Yes |
+| Restriction 2/5 | Prevent posting | 12 hours | Yes |
+| Restriction 3/5 | Prevent posting | 24 hours | Yes |
+| Restriction 4/5 | Prevent posting | 3 days | Yes |
+| Restriction 5/5 | Prevent posting | 7 days | Yes |
+| Ban 1/3 | Remove from group | 24 hours | No |
+| Ban 2/3 | Remove from group | 7 days | No |
+| Ban 3/3 | Remove from group | Permanent | No |
 
-Forwarded messages without a prohibited link still start directly at the ban
-sequence; an approved link does not exempt a forward. A message containing both
-a prohibited link and a forward receives the link warning if it is still due.
-The warning is separate for each member and group and does not expire when the
-30-day incident history is cleaned up.
+Restrictions are implemented through Telegram `restrictChatMember`, never a
+ban. Telegram lifts posting restrictions after `until_date`; Pilot retains
+the attained level so that a new violation after expiry advances one level.
+Old strike history is preserved. Existing members with prior ban strikes retain
+their prior ban escalation; they do not get backdated restriction stages.
+`/forgive` explicitly resets the warning, restrictions and ban strikes for
+the specified group, without lifting any active Telegram punishment.
 
-Existing strikes are retained. Members with prior strikes and no recorded link
-warning receive one warning on their next eligible prohibited link after
-rollout, then continue at their existing next ban level. Warnings and confirmed
-delivery records from the earlier warning-first release are adopted into the
-durable warning history. Missing delivery proof grants a warning reminder,
-not a ban. Existing active or permanent bans are not lifted.
+If delivery of the warning is unconfirmed, new prohibited links are deleted
+and may receive warning reminders, never a premature restriction or ban.
+Updates and media albums are idempotent. Forward-only messages continue to
+use the earlier ban sequence, and an approved link does not exempt a forward.
+A forwarded message containing a prohibited link follows the prohibited-link
+sequence. Members do not automatically rejoin after a temporary ban expires.
 
 See the [policy and rollout guide](docs/MODERATION_POLICY.md) for compatibility,
 recovery and release checks.
