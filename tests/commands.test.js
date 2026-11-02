@@ -688,3 +688,49 @@ test('status shows scheduled expiry sweep and pending count only to a verified a
   assert.equal(unauthorized.chat_id,GROUP);
   assert.doesNotMatch(unauthorized.text,/Expired Pilot bans|Temporary bans|Ban za Pilot zilizopita muda/);
 });
+
+test('admin can privately list current Pilot-known banned IDs and use existing /unban',async t=>{
+  const f=await fixture(t);
+  const row=await f.store.plan({id:'roster-case',chat_id:GROUP,user_id:TARGET,message_id:44,event_at:NOW-60,created_at:NOW-60,strike:1,until_date:NOW+86400,reasons:'["link"]'});
+  await f.store.confirm(row,NOW);
+  f.api.members.set(`${GROUP}:${TARGET}`,{status:'kicked',until_date:NOW+86400,user:{id:TARGET}});
+  await f.command(groupMessage('/bans'));
+  const reply=sent(f).at(-1).params;
+  assert.equal(reply.chat_id,ADMIN,'roster must be delivered as a private message');
+  assert.match(reply.text,/Pilot · Known bans|Pilot · Ban zinazojulikana/);
+  assert.match(reply.text,new RegExp(String(TARGET)));
+  assert.match(reply.text,/\/unban USER_ID/);
+  assert.doesNotMatch(reply.text,/roster-case/);
+  await f.command(groupMessage(`/unban ${TARGET}`));
+  assert.equal(f.api.callsOf('unbanChatMember').length,1);
+  assert.equal(f.api.callsOf('unbanChatMember')[0].params.only_if_banned,true);
+});
+test('non-admins cannot enumerate the roster and group replies remain generic if DM is blocked',async t=>{
+  const f=await fixture(t);
+  const row=await f.store.plan({id:'private-ban',chat_id:GROUP,user_id:TARGET,message_id:44,event_at:NOW-60,created_at:NOW-60,strike:1,until_date:NOW+86400,reasons:'["link"]'});
+  await f.store.confirm(row,NOW);
+  await f.command(groupMessage('/bans',USER));
+  assert.equal(f.api.callsOf('getChatMember').filter(x=>x.params.user_id===TARGET).length,0);
+  assert.doesNotMatch(sent(f).at(-1).params.text,/\b103\b|Known bans|Ban zinazojulikana/);
+  f.api.hooks.set('sendMessage',params=>{
+    if(params.chat_id===ADMIN)throw new TelegramError('blocked private message',403,false);
+    return {message_id:111};
+  });
+  await f.command(groupMessage('/bans'));
+  for(const call of sent(f).filter(x=>x.params.chat_id===GROUP)){
+    assert.doesNotMatch(call.params.text,/\b103\b|Known bans|Ban zinazojulikana|blocked private/);
+  }
+});
+test('saved private admin selection is freshly authorized before rendering /bans',async t=>{
+  const f=await fixture(t);
+  const row=await f.store.plan({id:'private-list',chat_id:GROUP,user_id:TARGET,message_id:44,event_at:NOW-60,created_at:NOW-60,strike:1,until_date:NOW+86400,reasons:'["link"]'});
+  await f.store.confirm(row,NOW);
+  f.api.members.set(`${GROUP}:${TARGET}`,{status:'kicked',until_date:NOW+86400});
+  await f.store.setAdminContext(ADMIN,GROUP,NOW);
+  await f.command(privateMessage('/bans',ADMIN));
+  assert.equal(sent(f).at(-1).params.chat_id,ADMIN);
+  assert.match(sent(f).at(-1).params.text,/103/);
+  f.api.member(GROUP,ADMIN,'member');
+  await f.command(privateMessage('/bans',ADMIN));
+  assert.doesNotMatch(sent(f).at(-1).params.text,/103|Known bans|Ban zinazojulikana/);
+});
