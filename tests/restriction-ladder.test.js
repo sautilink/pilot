@@ -168,3 +168,31 @@ test('forgive resets restriction ladder in one group without changing another',a
   assert.equal((await f.getRestriction()).level,0);
   assert.equal((await f.getRestriction(OTHER)).level,0);
 });
+
+test('lost response after Telegram actually restricted user safely reconciles with exactly one API mutation',async t=>{
+  const f=await fixture(t);
+  await f.moderator.handle(f.send());
+  f.advance(2);
+  const update=f.send();
+  f.hooks.set('restrictChatMember',params=>{
+    f.members.set(`${params.chat_id}:${params.user_id}`,{
+      status:'restricted',is_member:true,until_date:params.until_date,can_send_messages:false,
+      user:{id:params.user_id,first_name:'Member'}
+    });
+    throw new TelegramError('Response lost after Telegram success',0,true);
+  });
+  const uncertain=await f.moderator.handle(update);
+  assert.equal(uncertain.status,'uncertain');
+  assert.equal((await f.getRestriction()).level,0);
+  f.hooks.delete('restrictChatMember');
+  const retried=await f.moderator.handle(structuredClone(update));
+  assert.equal(retried.status,'restricted');
+  assert.equal(f.callsOf('restrictChatMember').length,1);
+  assert.equal((await f.getRestriction()).level,1);
+  assert.equal(f.callsOf('banChatMember').length,0);
+  const incident=await f.store.incident(`${GROUP}:message:${update.message.message_id}`);
+  assert.equal(incident.status,'restricted');
+  const again=await f.moderator.handle(structuredClone(update));
+  assert.equal(again.status,'duplicate');
+  assert.equal(f.callsOf('restrictChatMember').length,1);
+});
