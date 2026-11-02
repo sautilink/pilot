@@ -470,5 +470,7 @@ test('long-code exceptions cannot exempt a forwarded code or concealed prohibite
   await f.moderator.handle(f.message({text:LONG_COMMAND,forward_origin:{type:'hidden_user',date:START-1,sender_user_name:'Person'}}));
   assert.equal(f.of('banChatMember').length,1);assert.equal((await f.store.member(GROUP,USER)).strikes,1);
   await f.moderator.handle(f.message({text:LONG_COMMAND,from:{id:USER+5},entities:[{type:'text_link',offset:0,length:LONG_COMMAND.length,url:'https://forbidden.example'}]}));
-  assert.equal(f.of('banChatMember').length,2);assert.equal(f.of('restrictChatMember').length,0);
+  assert.equal(f.of('banChatMember').length,1);assert.equal(f.of('restrictChatMember').length,0);
+  assert.equal((await f.store.member(GROUP,USER+5)).strikes,0);
+  assert.equal((await f.db.prepare("SELECT COUNT(*) AS n FROM incidents WHERE strike=0 AND status='warned'").first()).n,1);
 });
