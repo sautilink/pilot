@@ -208,9 +208,18 @@ export function createControlService({ db, api, clock = () => Math.floor(Date.no
       ) WHERE (? IS NULL OR chat_id>?) ORDER BY chat_id ASC LIMIT 21`, String(user), saved, saved, cursor, cursor);
       const page = candidates.slice(0, 20);
       const groups = [];
-      for (const { chat_id: id } of page) {
-        if (!negativeId(id)) continue;
-        try { await authorize(user, Number(id)); groups.push(await chatInfo(Number(id))); } catch { /* Revoked/unavailable groups disclose no name. */ }
+      // A previously-known user can manage many groups. Serial Telegram role
+      // checks cause the Mini App to wait for every network round trip.
+      // Four in parallel bounds provider load and preserves cursor order.
+      for (let offset = 0; offset < page.length; offset += 4) {
+        const chunk = await Promise.all(page.slice(offset, offset + 4).map(async ({ chat_id: id }) => {
+          if (!negativeId(id)) return null;
+          try {
+            await authorize(user, Number(id));
+            return await chatInfo(Number(id));
+          } catch { return null; } // Revoked/unavailable groups disclose no name.
+        }));
+        for (const result of chunk) if (result) groups.push(result);
       }
       return { ok: true, groups, nextCursor: candidates.length > 20 ? page.at(-1).chat_id : null };
     }
