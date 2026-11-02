@@ -51,6 +51,23 @@ export function formatAnnouncement(row,message,success=true,language='sw',settin
   return {rich:`${rich}\n\n${FOOTER_RICH}`,plain:`${plain}\n\n${FOOTER_PLAIN}`};
 }
 
+// An educational, group-visible warning is not a strike. Mention the user
+// while they are still a member; a plain fallback is used if Telegram rejects
+// HTML/mentions. Never show a ban before Telegram has actually applied one.
+export function formatLinkWarning(row,message,language='sw') {
+  const en=language==='en',name=displayName(message,language);
+  const identity=Number(row.user_id);
+  const title=en?'⚠️ FIRST LINK WARNING':'⚠️ ONYO LA KWANZA LA LINK';
+  const advice=en
+    ? 'Your unapproved link was removed. This is a warning, not a ban. If you share another prohibited link, you will be banned for 24 hours. Further violations lead to 7 days, then a permanent ban.'
+    : 'Link yako isiyoruhusiwa imefutwa. Hili ni onyo, si ban. Ukirudia kutuma link isiyoruhusiwa, utafungiwa saa 24. Ukirudia tena, siku 7, kisha ban ya kudumu.';
+  const tagged=`<a href="tg://user?id=${identity}">${escapeHtml(name)}</a>`;
+  return {
+    rich:`<b>${title}</b>\n\n👤 ${tagged} (<code>${identity}</code>)\n\n${escapeHtml(advice)}\n\n${FOOTER_RICH}`,
+    plain:`${title}\n\n${name} (ID: ${identity})\n\n${advice}\n\n${FOOTER_PLAIN}`,
+  };
+}
+
 export function noticeErrorKind(error) {
   if(error.ambiguous!==false) return 'delivery_unknown';
   if(error.code===429) return 'rate_limit';
@@ -72,7 +89,9 @@ export function createAnnouncer({store,api,clock,controlStore}) {
     if(record.retry_at>clock()) return true;
     const language=Object.hasOwn(context,'groupLanguage') ? context.groupLanguage || 'sw' : await store.getLanguage('group',message.chat.id);
     const settings=context.groupSettings ?? (controlStore ? await controlStore.settings(message.chat.id) : {});
-    const {rich,plain}=formatAnnouncement(row,message,success,language,settings);
+    const {rich,plain}=row.strike===0 && row.status==='warned'
+      ? formatLinkWarning(row,message,language)
+      : formatAnnouncement(row,message,success,language,settings);
     let usePlain=false;
     let thread=message.is_topic_message && Number.isSafeInteger(message.message_thread_id) ? message.message_thread_id : null;
     for(let attempt=0;attempt<3;attempt++) {
