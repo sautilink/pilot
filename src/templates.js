@@ -92,8 +92,8 @@ export function publicGroupRules(settings,language='sw') {
     : 'Link ya kwanza isiyoruhusiwa: futa na tag kwa onyo. Links zinazofuata: restrictions za kutopost saa 1 → 12 → 24 → siku 3 → 7, kisha bans saa 24 → siku 7 → permanent. Forward-only zinafuata sheria za ban.';
   const commands=settings?.command_spam_enabled!==false
     ? language==='en'
-      ? 'Unapproved long /command-only spam is deleted without adding a ban, restriction or strike. Normal bot commands remain allowed.'
-      : 'Spam ya /command ndefu zisizoruhusiwa hufutwa bila ban, restriction au strike. Commands za kawaida zinaruhusiwa.'
+      ? 'Unapproved long /command-only spam is silently deleted. No ban, mute or strike is added. Normal bot commands remain allowed.'
+      : 'Spam ya /command ndefu zisizoruhusiwa hufutwa kimya kimya. Hakuna ban, mute wala kosa linaloongezwa. Commands za kawaida zinaruhusiwa.'
     : '';
   const extra=settings?.[`rules_${language==='en'?'en':'sw'}`];
   return [base,commands,extra].filter(Boolean).join('\n\n');
