@@ -310,7 +310,7 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
     });
     const welcomePreview = el('div', 'preview'); const welcomeCopy = el('div', 'preview-copy'); append(welcomePreview, el('p', 'preview-label', t('Mfano wa ukaribisho · haujatumiwa', 'Welcome preview · not sent')), welcomeCopy); body.append(welcomePreview, el('hr', 'setting-divider'));
     function updateWelcomePreview() {
-      const lng = groupLang.value; const raw = inputs[`welcome_${lng}`].value || (lng === 'en' ? 'Welcome, {user}! ✈️\nYou are joining {group}.\n\n{rules}' : 'Karibu, {user}! ✈️\nUmejiunga na {group}.\n\n{rules}');
+      const lng = groupLang.value; const raw = inputs[`welcome_${lng}`].value || (lng === 'en' ? 'Welcome {mention}! ✨\nYou joined {group_name}.\n\n{rules}' : 'Karibu {mention}! ✨\nUmejiunga na {group_name}.\n\n{rules}');
       const commandFilter = inputs.command_spam_enabled ? inputs.command_spam_enabled.checked : settings.command_spam_enabled !== false;
       const rules = (commandFilter ? previewData.rules : previewData.rulesWithoutCommandFilter)[lng];
       const fullRules=rules + (inputs[`rules_${lng}`].value.trim() ? `\n\n${inputs[`rules_${lng}`].value.trim()}` : '');
