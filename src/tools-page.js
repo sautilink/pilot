@@ -425,6 +425,7 @@ function toolsClient(language, eatTimestamp, makeRequestId, careFactory, doctorC
       const previous = more ? state.groups : []; state.groups = [...previous, ...(data.groups || [])].filter((row, index, rows) => rows.findIndex(other => String(other.id) === String(row.id)) === index); state.cursor = data.nextCursor || null; state.owner = data.owner === true;
       if (!more || !state.chatId) state.chatId = groupHint && (state.groups.some(group => String(group.id) === String(groupHint)) || ['events', 'knowledge','support'].includes(state.view)) ? groupHint : state.groups[0]?.id ? String(state.groups[0].id) : groupHint;
       state.admin = state.groups.some(group => String(group.id) === String(state.chatId));
+      const requestedView = state.view;
       if ((!state.admin && !['events', 'knowledge', 'support','feedback'].includes(state.view)&&!(state.owner&&state.view==='performance'))||state.view==='performance'&&!state.owner) state.view = state.chatId ? 'events' : 'feedback';
       const picker = $('tools-group'); picker.replaceChildren();
       for (const group of state.groups) { const option = el('option', '', group.title); option.value = String(group.id); picker.append(option); }
@@ -432,6 +433,8 @@ function toolsClient(language, eatTimestamp, makeRequestId, careFactory, doctorC
       picker.value = state.chatId || ''; $('tools-group-field').hidden = !state.chatId; $('tools-more').hidden = !state.cursor;
       $('tools-welcome').hidden = true; $('tools-app').hidden = false; renderNav();
       state.busy = false; await load();
+      // Do not silently route a requested admin action to an unrelated page.
+      if (requestedView !== state.view) showError(new Error('forbidden'));
     } catch (error) { $('tools-welcome').hidden = true; $('tools-app').hidden = false; state.view = 'feedback'; renderNav(); showError(error); $('tools-content').replaceChildren(empty(t('Session haijathibitishwa', 'Session could not be verified'), t('Fungua tena /tools kupitia bot.', 'Reopen /tools through the bot.'))); }
     finally { state.busy = false; $('tools-more').disabled = false; }
   }
