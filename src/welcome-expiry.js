@@ -22,25 +22,29 @@ export function createWelcomeExpiries({db,api,clock=()=>Math.floor(Date.now()/10
   }
   async function nextRunAt(chat){
     await ensure();const row=await db.prepare(`SELECT MIN(due_at) AS due FROM pilot_welcome_expiries
-      WHERE chat_id=? AND status='pending'`).bind(String(chat)).first();
+      WHERE chat_id=? AND status IN ('pending','sending')`).bind(String(chat)).first();
     return row?.due??null;
   }
   async function dueGroups(limit=20){
     await ensure();const rows=await db.prepare(`SELECT chat_id FROM pilot_welcome_expiries
-      WHERE status='pending' AND due_at<=? GROUP BY chat_id
+      WHERE status IN ('pending','sending') AND due_at<=? GROUP BY chat_id
       ORDER BY MIN(due_at) LIMIT ?`).bind(clock(),limit).all();
     return (rows.results||[]).map(x=>x.chat_id);
   }
   async function drain(chat,{limit=3}={}){
     if(!validChat(chat))return {done:0};await ensure();
     const now=clock();
+    // A worker may die after claiming an expiry. Requeue stale claims; Telegram
+    // deleteMessage is idempotent because a missing message is a done outcome.
+    await db.prepare("UPDATE pilot_welcome_expiries SET status='pending' WHERE chat_id=? AND status='sending' AND due_at<=?")
+      .bind(String(chat),now).run();
     const rows=(await db.prepare(`SELECT message_id,attempts FROM pilot_welcome_expiries
       WHERE chat_id=? AND status='pending' AND due_at<=?
       ORDER BY due_at LIMIT ?`).bind(String(chat),now,Math.min(5,limit)).all()).results||[];
     let done=0;
     for(const row of rows){
-      const locked=await db.prepare(`UPDATE pilot_welcome_expiries SET status='sending'
-        WHERE chat_id=? AND message_id=? AND status='pending'`).bind(String(chat),row.message_id).run();
+      const locked=await db.prepare(`UPDATE pilot_welcome_expiries SET status='sending',due_at=?
+        WHERE chat_id=? AND message_id=? AND status='pending'`).bind(now+300,String(chat),row.message_id).run();
       if(!(locked.meta?.changes??locked.changes??0))continue;
       let status='done',next=now;
       try {
