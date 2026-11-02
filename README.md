@@ -1,3 +1,18 @@
+
+## Personalized group welcome messages
+
+Admins can enable customized bilingual welcome messages in **Dashboard →
+Group Settings → Welcome message**. The existing on-join feature now supports
+18 safe tags, including `{mention}`, `{name}`, `{user_id}`,
+`{username}`, `{group_name}`, `{member_count}`, `{rules}` and
+`{date}`; optional custom HTTPS button; live Mini App preview; and automatic
+deletion of Pilot's own welcome after a chosen interval. Settings are per
+group and OFF by default; older saved `{user}/{group}/{rules}` messages
+keep working. Members are not punished for failing to read a welcome.
+
+See [Welcome messages](docs/WELCOME_MESSAGES.md) for complete tag references,
+Telegram permissions, delivery constraints and safety details.
+
 # SautiLink Pilot
 
 SautiLink Pilot helps Telegram communities manage moderation, member support
