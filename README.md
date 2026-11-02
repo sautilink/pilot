@@ -46,9 +46,12 @@ a prohibited link and a forward receives the link warning if it is still due.
 The warning is separate for each member and group and does not expire when the
 30-day incident history is cleaned up.
 
-Existing strikes are retained. Members with prior strikes receive one warning
-on their next eligible prohibited link after rollout, then continue at their
-existing next ban level. Existing active or permanent bans are not lifted.
+Existing strikes are retained. Members with prior strikes and no recorded link
+warning receive one warning on their next eligible prohibited link after
+rollout, then continue at their existing next ban level. Warnings and confirmed
+delivery records from the earlier warning-first release are adopted into the
+durable warning history. Missing delivery proof grants a warning reminder,
+not a ban. Existing active or permanent bans are not lifted.
 
 See the [policy and rollout guide](docs/MODERATION_POLICY.md) for compatibility,
 recovery and release checks.

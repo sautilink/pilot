@@ -47,6 +47,15 @@ async function fixture(t) {
   };
 }
 
+async function seedUpstreamWarning(f, { delivery = 'sent', messageId = 4800, at = START - 10 } = {}) {
+  const id = `${GROUP}:message:4800`;
+  await f.store.plan({ id, chat_id: GROUP, user_id: USER, message_id: 4800, event_at: at - 5, created_at: at - 5, strike: 0, until_date: 0, reasons: '["link"]' });
+  await f.store.run("UPDATE incidents SET status='warned',deleted=1,notified=1 WHERE id=?", id);
+  await f.store.run('UPDATE members SET last_incident=? WHERE chat_id=? AND user_id=?', id, String(GROUP), String(USER));
+  if (delivery) await f.store.run('INSERT INTO notification_delivery(incident_id,status,attempts,telegram_message_id,updated_at) VALUES(?,?,?,?,?)', id, delivery, 1, messageId, at);
+  return id;
+}
+
 test('fresh prohibited link is deleted, durably warned and tagged without any ban strike', async t => {
   const f = await fixture(t), update = f.message({ from: { id: USER, first_name: '<Juma & Sana>' } });
   let atSend;
@@ -354,12 +363,67 @@ test('the additive migration is repeatable and a legacy database upgrades withou
   await db.prepare('INSERT INTO members(chat_id,user_id,strikes,active_until,override_at) VALUES(?,?,?,?,?)').bind(String(GROUP), String(USER), 2, -1, START - 50).run();
   const before = await db.prepare('SELECT * FROM members').first();
   const migration = await readFile(new URL('../migrations/0013_link_warnings.sql', import.meta.url), 'utf8');
-  assert.equal(migration.replace(/^--.*$/gm, '').trim().replace(/\r/g, ''), LINK_WARNING_SCHEMA_SQL.trim());
+  const normalize = sql => sql.replace(/^--.*$/gm, '').replace(/\s+/g, ' ').trim();
+  assert.equal(normalize(migration), normalize(LINK_WARNING_SCHEMA_SQL));
   await db.exec(migration); await db.exec(migration);
   assert.deepEqual(await db.prepare('SELECT * FROM members').first(), before);
   assert.equal((await db.prepare('SELECT COUNT(*) AS n FROM member_link_warnings').first()).n, 0);
   const store = createStore(db); assert.equal(await store.linkWarning(GROUP, USER), null);
   assert.equal(await store.setting('pilot_schema:linkwarnings'), '1');
+});
+
+test('upgrade imports a confirmed upstream warning so the next later link starts bans without another warning', async t => {
+  const f = await fixture(t), id = await seedUpstreamWarning(f);
+  assert.equal(await f.warning(), null, 'upstream deployment had no separate warning ledger');
+  assert.equal((await f.moderator.handle(f.message())).status, 'confirmed');
+  const warning = await f.warning(); assert.equal(warning.incident_id, id); assert.equal(warning.delivered_at, START - 10);
+  assert.equal(f.callsOf('banChatMember').length, 1); assert.equal(f.callsOf('banChatMember')[0].params.until_date, START + 86400);
+  assert.equal(f.callsOf('sendMessage').length, 1); assert.doesNotMatch(f.callsOf('sendMessage')[0].params.text, /ONYO LA LINK/);
+  assert.equal((await f.state()).strikes, 1);
+});
+
+test('an imported upstream warning also protects queued links sent before its delivery timestamp', async t => {
+  const f = await fixture(t), id = await seedUpstreamWarning(f);
+  for (const date of [START - 11, START - 10]) assert.equal((await f.moderator.handle(f.message({ date }))).status, 'before_warning');
+  assert.equal((await f.warning()).incident_id, id); assert.equal(f.callsOf('banChatMember').length, 0); assert.equal(f.callsOf('sendMessage').length, 0);
+  assert.equal((await f.moderator.handle(f.message())).status, 'confirmed'); assert.equal(f.callsOf('banChatMember').length, 1);
+});
+
+test('pending or unverified upstream warning delivery requires a fresh successful reminder before bans', async t => {
+  for (const delivery of ['pending', 'unknown', 'failed', null]) {
+    const f = await fixture(t); await seedUpstreamWarning(f, { delivery, messageId: null });
+    assert.equal((await f.moderator.handle(f.message())).status, 'warned');
+    assert.equal(f.callsOf('banChatMember').length, 0); assert.equal((await f.state()).strikes, 0);
+    assert.equal((await f.warning()).delivered_at, f.now());
+    f.advance(1); assert.equal((await f.moderator.handle(f.message())).status, 'confirmed'); assert.equal(f.callsOf('banChatMember').length, 1);
+  }
+});
+
+test('an upstream sent claim without a valid Telegram message ID does not prove warning delivery', async t => {
+  for (const messageId of [null, 0, -1, 1.5, 'invalid']) {
+    const f = await fixture(t); await seedUpstreamWarning(f, { delivery: 'sent', messageId });
+    assert.equal((await f.moderator.handle(f.message())).status, 'warned');
+    assert.equal(f.callsOf('banChatMember').length, 0); assert.equal((await f.state()).strikes, 0);
+    assert.equal((await f.warning()).delivered_at, f.now(), 'only the new successful reminder proves delivery');
+  }
+});
+
+test('late upstream delivery proof upgrades an imported pending ledger on the next decision', async t => {
+  const f = await fixture(t), id = await seedUpstreamWarning(f, { delivery: 'pending', messageId: null });
+  await f.store.moderationState(GROUP, USER, `${GROUP}:message:1`);
+  assert.equal((await f.warning()).delivered_at, 0);
+  await f.store.run("UPDATE notification_delivery SET status='sent',telegram_message_id=4800,updated_at=? WHERE incident_id=?", START, id);
+  f.advance(1); assert.equal((await f.moderator.handle(f.message())).status, 'confirmed');
+  assert.equal((await f.warning()).incident_id, id); assert.equal((await f.warning()).delivered_at, START);
+  assert.equal(f.callsOf('banChatMember').length, 1); assert.equal((await f.state()).strikes, 1);
+});
+
+test('forgiveness before upgrade prevents a cancelled upstream warning from being imported again', async t => {
+  const f = await fixture(t), id = await seedUpstreamWarning(f);
+  await f.store.override(GROUP, USER, START - 1, true);
+  assert.equal((await f.store.incident(id)).status, 'cancelled'); assert.equal(await f.warning(), null);
+  assert.equal((await f.moderator.handle(f.message())).status, 'warned');
+  assert.notEqual((await f.warning()).incident_id, id); assert.equal(f.callsOf('banChatMember').length, 0); assert.equal((await f.state()).strikes, 0);
 });
 
 test('the real coordinator queue serializes concurrent duplicate and next-link decisions', async t => {

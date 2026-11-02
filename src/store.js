@@ -8,6 +8,26 @@ import {ensureSchemaFamily, applyCompleteSchema} from './schema-ready.js';
 // Moderated message bodies, captions and Telegram tokens are never persisted.
 // This independent ledger deliberately outlives incident retention. Existing
 // strikes are ban history, not evidence that a member received the new warning.
+const adoptLinkWarningsSql = scoped => `
+INSERT INTO member_link_warnings(chat_id,user_id,incident_id,warned_at,delivered_at)
+SELECT i.chat_id,i.user_id,i.id,MAX(i.created_at,i.event_at),
+  CASE WHEN n.status='sent' AND typeof(n.telegram_message_id)='integer'
+    AND n.telegram_message_id BETWEEN 1 AND 9007199254740991 AND n.updated_at>0
+    THEN MAX(i.created_at,i.event_at,n.updated_at) ELSE 0 END AS delivery_proof
+FROM incidents i JOIN members m ON m.chat_id=i.chat_id AND m.user_id=i.user_id
+LEFT JOIN notification_delivery n ON n.incident_id=i.id
+WHERE i.status='warned' AND i.deleted=1 AND i.strike=0
+  AND i.user_id GLOB '[1-9]*' AND i.user_id NOT GLOB '*[^0-9]*'
+  AND CAST(i.user_id AS INTEGER)<=9007199254740991 AND m.override_at<i.event_at
+  AND EXISTS(SELECT 1 FROM json_each(CASE WHEN json_valid(i.reasons) THEN i.reasons ELSE '[]' END) r WHERE r.value='link')
+  ${scoped ? 'AND i.chat_id=? AND i.user_id=?' : ''}
+ORDER BY delivery_proof DESC,i.created_at DESC,i.id DESC
+ON CONFLICT(chat_id,user_id) DO UPDATE SET incident_id=excluded.incident_id,
+  warned_at=excluded.warned_at,delivered_at=excluded.delivered_at
+WHERE member_link_warnings.delivered_at=0 AND excluded.delivered_at>0
+  AND member_link_warnings.incident_id=excluded.incident_id;
+`;
+export const LINK_WARNING_ADOPTION_SQL = adoptLinkWarningsSql(false);
 export const LINK_WARNING_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS member_link_warnings (
   chat_id TEXT NOT NULL, user_id TEXT NOT NULL,
@@ -15,7 +35,7 @@ CREATE TABLE IF NOT EXISTS member_link_warnings (
   delivered_at INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY(chat_id,user_id)
 );
-`;
+` + LINK_WARNING_ADOPTION_SQL;
 export const EXPERIENCE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS notification_delivery (
   incident_id TEXT PRIMARY KEY,
@@ -57,7 +77,7 @@ CREATE TABLE IF NOT EXISTS processed_updates (
   update_id INTEGER PRIMARY KEY, processed_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS processed_age ON processed_updates(processed_at);
-` + LINK_WARNING_SCHEMA_SQL + EXPERIENCE_SCHEMA_SQL + CONTROL_SCHEMA_SQL + GUARDRAIL_SCHEMA_SQL + OWNER_SCHEMA_SQL + BROADCAST_SCHEMA_SQL;
+` + EXPERIENCE_SCHEMA_SQL + LINK_WARNING_SCHEMA_SQL + CONTROL_SCHEMA_SQL + GUARDRAIL_SCHEMA_SQL + OWNER_SCHEMA_SQL + BROADCAST_SCHEMA_SQL;
 
 export const applySchema = db => applyCompleteSchema(db, SCHEMA_SQL);
 
@@ -65,12 +85,20 @@ export function createStore(db) {
   const run = (sql, ...args) => db.prepare(sql).bind(...args).run();
   const first = (sql, ...args) => db.prepare(sql).bind(...args).first();
   const ensureExtras = () => ensureSchemaFamily(db, 'experience', EXPERIENCE_SCHEMA_SQL);
-  const ensureLinkWarnings = () => ensureSchemaFamily(db, 'linkwarnings', LINK_WARNING_SCHEMA_SQL);
+  const ensureLinkWarnings = async () => {
+    await ensureExtras();
+    return ensureSchemaFamily(db, 'linkwarnings', LINK_WARNING_SCHEMA_SQL);
+  };
+  const adoptMemberWarnings = (chat,user) => db.prepare(adoptLinkWarningsSql(true)).bind(String(chat),String(user));
   return {
     run, first, ensureExtras, ensureLinkWarnings,
     async linkWarning(chat,user) {
       await ensureLinkWarnings();
-      return first('SELECT * FROM member_link_warnings WHERE chat_id=? AND user_id=?',String(chat),String(user));
+      const results=await db.batch([
+        adoptMemberWarnings(chat,user),
+        db.prepare('SELECT * FROM member_link_warnings WHERE chat_id=? AND user_id=?').bind(String(chat),String(user)),
+      ]);
+      return results[1].results[0] || null;
     },
     async setting(key) { return (await first('SELECT value FROM settings WHERE key = ?', key))?.value ?? null; },
     async settings(values) {
@@ -110,6 +138,9 @@ export function createStore(db) {
       // their message contains a link. Read defaults until an incident is planned.
       if(target!==null) statements.push(
         db.prepare('SELECT * FROM members WHERE chat_id=? AND user_id=?').bind(chatId,target),
+        // A previous deployment can finish a warning after the operator ran the
+        // migration. Reconcile durable proof in this same snapshot transaction.
+        adoptMemberWarnings(chatId,target),
         db.prepare('SELECT * FROM member_link_warnings WHERE chat_id=? AND user_id=?').bind(chatId,target),
       );
       statements.push(db.prepare('SELECT * FROM incidents WHERE id=?').bind(incidentId));
@@ -117,7 +148,7 @@ export function createStore(db) {
       const member=target===null ? null : results[3].results[0] || {
         chat_id:chatId,user_id:target,strikes:0,last_incident:null,active_until:0,episode_at:0,override_at:0,
       };
-      return {group:results[1].results[0],activation:Number(results[2].results[0]?.value || 0),member,linkWarning:target===null ? null : results[4].results[0] || null,incident:results.at(-1).results[0] || null};
+      return {group:results[1].results[0],activation:Number(results[2].results[0]?.value || 0),member,linkWarning:target===null ? null : results[5].results[0] || null,incident:results.at(-1).results[0] || null};
     },
     incident(id) { return first('SELECT * FROM incidents WHERE id=?',id); },
     async plan(row) {
@@ -228,9 +259,12 @@ export function createStore(db) {
       return run('INSERT INTO language_preferences(scope,subject_id,language,updated_at) VALUES(?,?,?,?) ON CONFLICT(scope,subject_id) DO UPDATE SET language=excluded.language,updated_at=excluded.updated_at',scope,String(id),language,now);
     },
     async cleanup(now) {
-      await ensureExtras();
+      await ensureLinkWarnings();
       // 7 days exceeds Telegram's update retention; stale messages are never enforced.
       await db.batch([
+        // Preserve late warnings from the previous deployment before deleting
+        // their retained incidents and notification-delivery evidence.
+        db.prepare(LINK_WARNING_ADOPTION_SQL),
         db.prepare('DELETE FROM processed_updates WHERE processed_at < ?').bind(now-7*86400),
         db.prepare('DELETE FROM notification_delivery WHERE incident_id IN (SELECT id FROM incidents WHERE created_at < ?)').bind(now-30*86400),
         db.prepare('DELETE FROM admin_sessions WHERE updated_at < ?').bind(now-30*86400),

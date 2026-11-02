@@ -140,8 +140,47 @@ test('ready legacy installations lazily add the warning ledger without rewriting
 test('operator migration and runtime schema declare the same additive warning ledger',async t=>{
   const db=new TestD1();t.after(()=>db.close());
   const migration=await readFile(new URL('../migrations/0013_link_warnings.sql',import.meta.url),'utf8');
+  await db.exec(SCHEMA_SQL.replace(LINK_WARNING_SCHEMA_SQL,''));
   await db.exec(migration);
   const normalize=sql=>sql.replace(/\s+/g,' ').replace(/;\s*$/,'').trim();
   const actual=await db.prepare("SELECT sql FROM sqlite_master WHERE name='member_link_warnings'").first('sql');
-  assert.equal(normalize(actual),normalize(LINK_WARNING_SCHEMA_SQL.replace(/ IF NOT EXISTS/,'')));
+  assert.equal(normalize(actual),normalize(LINK_WARNING_SCHEMA_SQL.split(';')[0].replace(/ IF NOT EXISTS/,'')));
+});
+
+test('migration imports prior warning delivery while preserving members and excluding cancelled records',async t=>{
+  const db=new TestD1();t.after(()=>db.close());
+  await db.exec(SCHEMA_SQL.replace(LINK_WARNING_SCHEMA_SQL,''));
+  const store=createStore(db),row=await store.plan(warning());
+  await store.run("UPDATE incidents SET status='warned',deleted=1 WHERE id=?",row.id);
+  await store.run('UPDATE members SET last_incident=?,episode_at=? WHERE chat_id=? AND user_id=?',row.id,NOW,String(CHAT),String(USER));
+  await store.run("INSERT INTO notification_delivery(incident_id,status,telegram_message_id,updated_at) VALUES(?,'sent',500,?)",row.id,NOW+5);
+  const before=await store.member(CHAT,USER);
+  const cancelled=await store.plan(warning({id:'cancelled',user_id:102}));
+  await store.run("UPDATE incidents SET status='cancelled',deleted=1 WHERE id=?",cancelled.id);
+  const migration=await readFile(new URL('../migrations/0013_link_warnings.sql',import.meta.url),'utf8');
+  await db.exec(migration);await db.exec(migration);
+  const adopted=await db.prepare('SELECT * FROM member_link_warnings WHERE chat_id=? AND user_id=?').bind(String(CHAT),String(USER)).first();
+  assert.equal(adopted.delivered_at,NOW+5);assert.equal(adopted.incident_id,row.id);
+  assert.deepEqual(await store.member(CHAT,USER),before);
+  assert.equal(await db.prepare('SELECT * FROM member_link_warnings WHERE user_id=?').bind('102').first(),null);
+});
+
+test('cleanup adopts late prior warning proof before deleting its retained evidence',async t=>{
+  const {store}=await fixture(t),row=await store.plan(warning());
+  await store.run("UPDATE incidents SET status='warned',deleted=1 WHERE id=?",row.id);
+  await store.run("INSERT INTO notification_delivery(incident_id,status,telegram_message_id,updated_at) VALUES(?,'sent',500,?)",row.id,NOW+5);
+  await store.cleanup(NOW+31*86400);
+  assert.equal(await store.incident(row.id),null);
+  assert.equal((await store.linkWarning(CHAT,USER)).delivered_at,NOW+5);
+});
+
+test('late prior warning adoption cannot revive cancelled or overridden evidence',async t=>{
+  const {store}=await fixture(t),row=await store.plan(warning());
+  await store.run("UPDATE incidents SET status='warned',deleted=1 WHERE id=?",row.id);
+  await store.run('UPDATE members SET override_at=? WHERE chat_id=? AND user_id=?',NOW+1,String(CHAT),String(USER));
+  await store.run("INSERT INTO notification_delivery(incident_id,status,telegram_message_id,updated_at) VALUES(?,'sent',500,?)",row.id,NOW+5);
+  assert.equal(await store.linkWarning(CHAT,USER),null);
+  await store.run("UPDATE incidents SET status='cancelled' WHERE id=?",row.id);
+  await store.run('UPDATE members SET override_at=0 WHERE chat_id=? AND user_id=?',String(CHAT),String(USER));
+  assert.equal(await store.linkWarning(CHAT,USER),null);
 });

@@ -16,10 +16,27 @@ checks and human admin decisions retain their existing behavior.
 
 The warning marker is separate from `members.strikes`. Deployment does not
 reinterpret or clear old strikes, fabricate past warnings, or lift existing
-bans. An eligible member with legacy strikes receives one warning on their next
-prohibited link. The following violation resumes at their retained next ban
-level, for example an existing strike count of 1 leads to a 7-day ban after the
-new warning. An existing active ban still wins over a queued message.
+bans. An eligible member with legacy strikes and no recorded link warning
+receives one warning on their next prohibited link. The following violation
+resumes at their retained next ban level, for example an existing strike count
+of 1 leads to a 7-day ban after the warning. An existing active ban still wins
+over a queued message.
+
+An earlier warning-first release may already have recorded warnings as incidents
+without a separate durable marker. Existing deleted, `warned` link incidents are
+adopted into the new per-member/group ledger, preserving the warning already
+given. Delivery is adopted only from a matching confirmed `sent` notification
+record with a valid Telegram message ID. The notification's delivery timestamp
+is retained for the queued-message protection below. A notified flag, an old
+strike, an incident alone, or an unknown/failed/pending delivery is not proof
+that a warning reached Telegram. Without delivery proof, later prohibited links
+receive warning reminders rather than bans. Existing ledger entries, strikes,
+ban state and admin overrides are preserved during adoption.
+
+This release explicitly replaces the earlier prototype's stricter handling of
+mixed link/forward messages, legacy strikes and same-second messages with the
+policies stated here. It does not replay old warnings merely because the
+storage format changed, or reverse a ban already sent by that release.
 
 An unsent legacy link incident still in the planned state is converted to a
 warning if there is no confirmed warning delivery. This includes a retry after
@@ -43,8 +60,9 @@ warning as a ban.
 ## Persistence and recovery
 
 The additive migration creates a warning-marker table; it does not rewrite
-legacy members or incidents. The runtime also prepares this schema family for
-existing Workers installations. The durable marker survives the existing
+legacy members or incidents. The runtime prepares this schema family and adopts
+eligible warning and delivery records for existing Workers installations. The
+durable marker survives the existing
 30-day incident cleanup. Warning incidents have strike 0 and no ban end date;
 they must be displayed as warnings, never interpreted as permanent bans.
 

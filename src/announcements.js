@@ -65,6 +65,11 @@ export function formatAnnouncement(row,message,success=true,language='sw',settin
   return {rich:`${rich}\n\n${FOOTER_RICH}`,plain:`${plain}\n\n${FOOTER_PLAIN}`};
 }
 
+// Retain the formatter entry point used by the earlier warning release.
+export function formatLinkWarning(row,message,language='sw') {
+  return formatAnnouncement({...row,status:'warned'},message,false,language);
+}
+
 export function noticeErrorKind(error) {
   if(error.ambiguous!==false) return 'delivery_unknown';
   if(error.code===429) return 'rate_limit';
