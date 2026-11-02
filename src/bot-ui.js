@@ -1,6 +1,6 @@
 import { escapeHtml } from './policy.js';
 
-export const EXPERIENCE_VERSION = '2026-11-02.2';
+export const EXPERIENCE_VERSION = '2026-11-02.3';
 export const BOT_DESCRIPTION = 'SautiLink Pilot husaidia kusimamia Telegram groups kwa sheria wazi, moderation ya links na forwards, na matangazo yenye sababu. Kagua link, ona matukio yako au tuma rufaa. Shiriki events, chagua vikumbusho na omba msaada wa admins faraghani ikiwa group limeruhusu. Admin ana paneli yake ya mipangilio na zana. Kiswahili / English.';
 export const BOT_SHORT_DESCRIPTION = 'Moderation, events, msaada wa faragha na zana za admins. Kiswahili / English.';
 
@@ -131,7 +131,7 @@ export function renderBotPage(page, context = {}) {
       break;
     case 'status':
       if (!context.groupId) return renderBotPage('admin', context);
-      text = `🛡 <b>Hali ya group</b>\n<b>Group:</b> ${cleanName(context.groupTitle) || 'Group lako'}\n<b>ID:</b> <code>${escapeHtml(String(context.groupId))}</code>\n\n<b>Moderation:</b> ${context.moderationEnabled ? 'imewashwa' : 'imesitishwa'}.\n<b>Aina:</b> ${context.groupType === 'supergroup' ? 'supergroup' : 'group'}.\n<b>Lugha ya group:</b> ${context.groupLanguage === 'en' ? 'English' : 'Kiswahili'}.\n<b>Ruhusa:</b> ${context.permissionsComplete ? 'zimekamilika' : 'kagua nafasi ya admin, Delete messages na Ban users'}.\n<b>Adhabu:</b> saa 24 → siku 7 → ban ya kudumu.\n\n<b>Matangazo:</b> ${escapeHtml(context.noticeSummary || 'Hakuna taarifa ya tangazo bado.')}\n<b>Ban za muda:</b> ${escapeHtml(context.expirySummary || 'Ukaguzi haujathibitishwa.')}\n\nTaarifa hizi ni za group ulilochagua pekee.`;
+      text = `🛡 <b>Hali ya group</b>\n<b>Group:</b> ${cleanName(context.groupTitle) || 'Group lako'}\n<b>ID:</b> <code>${escapeHtml(String(context.groupId))}</code>\n\n<b>Moderation:</b> ${context.moderationEnabled ? 'imewashwa' : 'imesitishwa'}.\n<b>Aina:</b> ${context.groupType === 'supergroup' ? 'supergroup' : 'group'}.\n<b>Lugha ya group:</b> ${context.groupLanguage === 'en' ? 'English' : 'Kiswahili'}.\n<b>Ruhusa:</b> ${context.permissionsComplete ? 'zimekamilika' : 'kagua nafasi ya admin, Delete messages na Ban users'}.\n<b>Link:</b> link ya kwanza isiyoruhusiwa inafutwa + onyo kwa kutag member (hakuna ban). Akirudia: saa 24 → siku 7 → ban ya kudumu. Forwards zinafuata adhabu zilizopo.\n\n<b>Matangazo:</b> ${escapeHtml(context.noticeSummary || 'Hakuna taarifa ya tangazo bado.')}\n<b>Ban za muda:</b> ${escapeHtml(context.expirySummary || 'Ukaguzi haujathibitishwa.')}\n\nTaarifa hizi ni za group ulilochagua pekee.`;
       rows = [[button('↻ Sasisha hali', 'status'), button('🛡 Paneli ya admin', 'admin')], [homeButton()]];
       break;
     default:
@@ -281,7 +281,7 @@ function renderEnglishPage(page, context) {
       break;
     case 'status':
       if (!context.groupId) return renderEnglishPage('admin', context);
-      text = `🛡 <b>Group status</b>\n<b>Group:</b> ${cleanName(context.groupTitle) || 'Your group'}\n<b>ID:</b> <code>${escapeHtml(String(context.groupId))}</code>\n\n<b>Moderation:</b> ${context.moderationEnabled ? 'enabled' : 'paused'}.\n<b>Type:</b> ${context.groupType === 'supergroup' ? 'supergroup' : 'group'}.\n<b>Group language:</b> ${context.groupLanguage === 'en' ? 'English' : 'Kiswahili'}.\n<b>Permissions:</b> ${context.permissionsComplete ? 'complete' : 'check admin status, Delete messages, and Ban users'}.\n<b>Bans:</b> 24 hours → 7 days → permanent.\n\n<b>Announcements:</b> ${escapeHtml(context.noticeSummary || 'No announcement record yet.')}\n<b>Temporary bans:</b> ${escapeHtml(context.expirySummary || 'No scan recorded yet.')}\n\nThis information belongs only to the group you selected.`;
+      text = `🛡 <b>Group status</b>\n<b>Group:</b> ${cleanName(context.groupTitle) || 'Your group'}\n<b>ID:</b> <code>${escapeHtml(String(context.groupId))}</code>\n\n<b>Moderation:</b> ${context.moderationEnabled ? 'enabled' : 'paused'}.\n<b>Type:</b> ${context.groupType === 'supergroup' ? 'supergroup' : 'group'}.\n<b>Group language:</b> ${context.groupLanguage === 'en' ? 'English' : 'Kiswahili'}.\n<b>Permissions:</b> ${context.permissionsComplete ? 'complete' : 'check admin status, Delete messages, and Ban users'}.\n<b>Link policy:</b> first prohibited link deleted + tagged warning (no ban). Repeat: 24 hours → 7 days → permanent. Forwards retain existing penalties.\n\n<b>Announcements:</b> ${escapeHtml(context.noticeSummary || 'No announcement record yet.')}\n<b>Temporary bans:</b> ${escapeHtml(context.expirySummary || 'No scan recorded yet.')}\n\nThis information belongs only to the group you selected.`;
       rows = [[button('↻ Refresh status', 'status'), button('🛡 Admin panel', 'admin')], [home()]];
       break;
     default:
