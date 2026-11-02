@@ -3,7 +3,7 @@
 // Only initialization results are cached here, never users, roles or settings.
 import { databaseIdentity } from './request-timing.js';
 export const SCHEMA_FAMILY_VERSIONS = Object.freeze({
-  experience: '1', control: '1', guards: '1', owner: '1', broadcast: '1', linkwarnings: '1', restrictions: '1',
+  experience: '1', control: '1', guards: '1', owner: '1', broadcast: '1', linkwarnings: '1', restrictions: '1', welcome: '1',
 });
 const PREFIX = 'pilot_schema:';
 const bindings = new WeakMap();
