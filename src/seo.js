@@ -2,7 +2,7 @@ export const SEO_ORIGIN = 'https://pilot.sautilink.com';
 export const PUBLIC_SEO_PAGES = Object.freeze(['/', '/privacy', '/updates', '/roadmap', '/developers', '/communities']);
 
 const LOGO_URL = 'https://sautilink.com/logo.png';
-const ORGANIZATION_ID = 'https://www.sautilink.com/#organization';
+const ORGANIZATION_ID = 'https://sautilink.com/#organization';
 const WEBSITE_ID = `${SEO_ORIGIN}/#website`;
 const APPLICATION_ID = `${SEO_ORIGIN}/#application`;
 const normalizeLang = lang => lang === 'sw' ? 'sw' : 'en';
@@ -24,7 +24,7 @@ function structuredData({ title, description, path, lang, url }) {
       '@type': 'Organization',
       '@id': ORGANIZATION_ID,
       name: 'SautiLink Corporation',
-      url: 'https://www.sautilink.com/',
+      url: 'https://sautilink.com/',
       logo: LOGO_URL,
     },
     {
@@ -48,6 +48,19 @@ function structuredData({ title, description, path, lang, url }) {
       ...(path === '/' ? { mainEntity: { '@id': APPLICATION_ID } } : {}),
     },
   ];
+  if (path === '/privacy') {
+    // The visible public navigation leads from the Pilot home to Privacy.
+    const breadcrumbId = `${url}#breadcrumb`;
+    graph[2].breadcrumb = { '@id': breadcrumbId };
+    graph.push({
+      '@type': 'BreadcrumbList',
+      '@id': breadcrumbId,
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'SautiLink Pilot', item: `${SEO_ORIGIN}/` },
+        { '@type': 'ListItem', position: 2, name: title, item: url },
+      ],
+    });
+  }
   if (path === '/') {
     graph.push({
       '@type': 'SoftwareApplication',

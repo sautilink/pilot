@@ -80,7 +80,8 @@ test('public structured data identifies the real service without invented rating
     const webpage = graph.find(node => node['@type'] === 'WebPage');
     const application = graph.find(node => node['@type'] === 'SoftwareApplication');
     assert.equal(organization.name, 'SautiLink Corporation');
-    assert.equal(organization.url, 'https://www.sautilink.com/');
+    assert.equal(organization.url, 'https://sautilink.com/');
+    assert.equal(organization['@id'], 'https://sautilink.com/#organization');
     assert.equal(website.name, 'SautiLink Pilot');
     assert.equal(website.url, `${SEO_ORIGIN}/`);
     assert.deepEqual(website.inLanguage, ['en', 'sw']);
@@ -96,6 +97,12 @@ test('public structured data identifies the real service without invented rating
     const privacy = schemaOf(headOf(renderPrivacy(lang)))['@graph'];
     assert.equal(privacy.find(node => node['@type'] === 'WebPage').url, canonicalUrl('/privacy', lang));
     assert.equal(privacy.some(node => node['@type'] === 'SoftwareApplication'), false);
+    const privacyPage = privacy.find(node => node['@type'] === 'WebPage');
+    const breadcrumb = privacy.find(node => node['@type'] === 'BreadcrumbList');
+    assert.equal(privacyPage.breadcrumb['@id'], breadcrumb['@id']);
+    assert.equal(breadcrumb.itemListElement.length, 2);
+    assert.equal(breadcrumb.itemListElement[0].item, `${SEO_ORIGIN}/`);
+    assert.equal(breadcrumb.itemListElement[1].item, canonicalUrl('/privacy', lang));
   }
 });
 
