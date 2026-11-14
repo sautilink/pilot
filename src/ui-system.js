@@ -87,7 +87,7 @@ function themeClient() {
   };
   // Enable optional Inter after its CSS has arrived, never delaying layout.
   // No inline onload HTML handlers or external synchronous stylesheets.
-  const fastFont=document.getElementById('pilot-miniapp-font');
+  const fastFont=document.getElementById?.('pilot-miniapp-font');
   if(fastFont){
     const enable=()=>{fastFont.media='all';};
     if(fastFont.sheet)enable();
