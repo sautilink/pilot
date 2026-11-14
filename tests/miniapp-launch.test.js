@@ -23,6 +23,9 @@ test('without Telegram signed data, never authenticate via user hints or URL que
   assert.equal(miniAppTelegramContext({platform:'android'},'https://pilot.sautilink.com/app'),true);
   assert.equal(miniAppTelegramContext({platform:'unknown'},'https://pilot.sautilink.com/app'),false);
   assert.equal(miniAppTelegramContext(null,'https://pilot.sautilink.com/app'),false);
+  assert.equal(miniAppTelegramContext(null,'https://pilot.sautilink.com/app','Mozilla/5.0 Telegram/11.0'),true);
+  assert.equal(miniAppTelegramContext(null,'https://pilot.sautilink.com/app','',true),true);
+  assert.equal(miniAppLaunchData(null,'https://pilot.sautilink.com/app'),'', 'browser context alone never authorizes the API');
 });
 test('recovered launch data is still passed as signed raw initData to backend HMAC validation',()=>{
   const data=miniAppLaunchData(null,launch);
