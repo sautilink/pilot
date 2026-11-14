@@ -199,14 +199,16 @@ export function createControlService({ db, api, clock = () => Math.floor(Date.no
   async function stats(chat) {
     const now = clock(), result = {};
     // Group reports use East Africa Time; the longer windows are rolling periods.
-    for (const [period, since] of [['today', now - (now + 3 * 3600) % 86400], ['week', now - 7 * 86400], ['month', now - 30 * 86400]]) {
-      const row = await store.first(`SELECT COUNT(*) AS incidents,
+    const windows = [['today', now - (now + 3 * 3600) % 86400], ['week', now - 7 * 86400], ['month', now - 30 * 86400]];
+    const rows=await Promise.all(windows.map(async ([period,since])=>{
+      const row=await store.first(`SELECT COUNT(*) AS incidents,
         COALESCE(SUM(CASE WHEN status='confirmed' THEN 1 ELSE 0 END),0) AS confirmed,
         COALESCE(SUM(CASE WHEN instr(reasons,'"forward"')>0 THEN 1 ELSE 0 END),0) AS forwards,
         COALESCE(SUM(CASE WHEN instr(reasons,'"link"')>0 THEN 1 ELSE 0 END),0) AS links
-        FROM incidents WHERE chat_id=? AND created_at>=?`, String(chat), since);
-      result[period] = { incidents: Number(row.incidents), confirmed: Number(row.confirmed), forwards: Number(row.forwards), links: Number(row.links) };
-    }
+        FROM incidents WHERE chat_id=? AND created_at>=?`,String(chat),since);
+      return [period,{incidents:Number(row.incidents),confirmed:Number(row.confirmed),forwards:Number(row.forwards),links:Number(row.links)}];
+    }));
+    for(const [period,row] of rows)result[period]=row;
     return result;
   }
 
@@ -235,8 +237,13 @@ export function createControlService({ db, api, clock = () => Math.floor(Date.no
         const chunk = await Promise.all(page.slice(offset, offset + 4).map(async ({ chat_id: id }) => {
           if (!negativeId(id)) return null;
           try {
-            await authorize(user, Number(id));
-            return await chatInfo(Number(id));
+            // Both calls are reads; never surface metadata until Telegram
+            // confirms the actor is an admin. Concurrent requests remove one
+            // full Telegram network round-trip per known group.
+            const [_,info]=await Promise.all([
+              authorize(user,Number(id)),chatInfo(Number(id))
+            ]);
+            return info;
           } catch { return null; } // Revoked/unavailable groups disclose no name.
         }));
         for (const result of chunk) if (result) groups.push(result);
@@ -265,20 +272,36 @@ export function createControlService({ db, api, clock = () => Math.floor(Date.no
     if (!ADMIN_VIEWS.has(view)) fail('invalid_view');
     const chat = requireChat(chatId);
     await authorize(user, chat);
-    const group = await chatInfo(chat);
-    const moderation = await base.group(chat);
-    let own;
-    try { own = await member(chat, (await me()).id); } catch { own = null; }
-    const since = clock() - 30 * 86400;
-    const audit = (await store.all('SELECT id,actor_id,action,target_id,incident_id,details_json,created_at FROM pilot_audit WHERE chat_id=? AND created_at>=? ORDER BY created_at DESC,rowid DESC LIMIT 50', String(chat), since))
-      .map(row => ({ id: row.id, actor_id: row.actor_id, action: row.action, target_id: row.target_id, incident_id: row.incident_id, details: safeAuditDetails(json(row.details_json, {})), created_at: row.created_at }));
+    // Authorization above is completed BEFORE touching or returning private
+    // group data. Independent Telegram and D1 reads can now happen together.
+    // Each request still rechecks the actor's real Telegram admin role.
+    const since=clock()-30*86400;
+    const [
+      group,moderation,own,language,settings,rules,subscription,
+      incidents,appeals,auditRows,statistics,joins
+    ]=await Promise.all([
+      chatInfo(chat),
+      base.group(chat),
+      me().then(bot=>member(chat,bot.id)).catch(()=>null),
+      base.getLanguage('group',chat),
+      store.settings(chat),
+      store.rules(chat,clock()),
+      store.subscription(user,chat),
+      cases('i.chat_id=?',[String(chat)]),
+      store.all('SELECT id,incident_id,user_id,message,status,decision,reviewed_by,created_at,updated_at FROM pilot_appeals WHERE chat_id=? AND created_at>=? ORDER BY updated_at DESC,rowid DESC LIMIT 50',String(chat),since),
+      store.all('SELECT id,actor_id,action,target_id,incident_id,details_json,created_at FROM pilot_audit WHERE chat_id=? AND created_at>=? ORDER BY created_at DESC,rowid DESC LIMIT 50',String(chat),since),
+      stats(chat),
+      guards.joins(chat),
+    ]);
+    const audit=auditRows.map(row=>({
+      id:row.id,actor_id:row.actor_id,action:row.action,target_id:row.target_id,
+      incident_id:row.incident_id,details:safeAuditDetails(json(row.details_json,{})),
+      created_at:row.created_at
+    }));
     return {
-      ok: true, group,
-      moderation: { enabled: !!moderation.enabled, permissionsComplete: admin(own) && !!own.can_delete_messages && !!own.can_restrict_members },
-      language: await base.getLanguage('group', chat), settings: await store.settings(chat), rules: await store.rules(chat, clock()),
-      subscription: await store.subscription(user, chat), incidents: await cases('i.chat_id=?', [String(chat)]),
-      appeals: await store.all('SELECT id,incident_id,user_id,message,status,decision,reviewed_by,created_at,updated_at FROM pilot_appeals WHERE chat_id=? AND created_at>=? ORDER BY updated_at DESC,rowid DESC LIMIT 50', String(chat), since),
-      audit, stats: await stats(chat), joins: await guards.joins(chat),
+      ok:true,group,
+      moderation:{enabled:!!moderation.enabled,permissionsComplete:admin(own)&&!!own.can_delete_messages&&!!own.can_restrict_members},
+      language,settings,rules,subscription,incidents,appeals,audit,stats:statistics,joins
     };
   }
 
