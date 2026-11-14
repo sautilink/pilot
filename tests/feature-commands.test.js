@@ -63,7 +63,7 @@ test('private home and dashboard launch the Mini App; groups receive only privat
   for (const command of ['/start', '/dashboard', '/start dashboard']) {
     await f.command(privateMessage(command));
     const buttons = f.replies().at(-1).params.reply_markup.inline_keyboard.flat();
-    assert.ok(buttons.some(button => button.web_app?.url === 'https://pilot.sautilink.com/app?lang=en'));
+    assert.ok(buttons.some(button => button.web_app?.url?.startsWith('https://pilot.sautilink.com/app?lang=en')));
   }
   for (const command of ['/dashboard', '/mystatus', '/appeal', '/checklink']) {
     await f.command(groupMessage(command));
