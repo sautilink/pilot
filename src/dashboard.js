@@ -43,7 +43,7 @@ export function renderDashboard({ lang = 'en' } = {}) {
     previewData.notices[locale] = {};
     for (const style of ['detailed', 'compact', 'formal']) previewData.notices[locale][style] = formatAnnouncement(sample, { from: { first_name: 'Asha' }, chat: { title: 'Group' } }, true, locale, { notice_template: style }).plain;
   }
-  return `<!doctype html><html lang="${language}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><meta name="theme-color" content="#ffffff"><meta name="color-scheme" content="light dark"><link rel="icon" href="https://sautilink.com/logo.png"><title>${t('Kituo cha udhibiti', 'Control center')} · SautiLink Pilot</title><script src="https://telegram.org/js/telegram-web-app.js?65"></script>${themeHead()}${iconScripts()}<style>${APP_STYLES}</style></head><body data-public-icons>
+  return `<!doctype html><html lang="${language}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer"><meta name="theme-color" content="#ffffff"><meta name="color-scheme" content="light dark"><link rel="icon" href="https://sautilink.com/logo.png"><title>${t('Kituo cha udhibiti', 'Control center')} · SautiLink Pilot</title><script async src="https://telegram.org/js/telegram-web-app.js?65"></script>${themeHead()}${iconScripts()}<style>${APP_STYLES}</style></head><body data-public-icons>
 <header class="app-header"><a href="/${languageQuery}" class="brand" aria-label="SautiLink Pilot"><img src="https://sautilink.com/logo.png" alt="" width="30" height="30"><div><strong>SautiLink <span>Pilot</span></strong><small>${t('Kituo cha udhibiti', 'Control center')}</small></div></a><div class="header-right"><span class="header-state" id="header-state">${dashboardIcon('lock')}${t('Nafasi yako ya faragha', 'Your private workspace')}</span>${themeButton(language)}<div class="language-toggle" aria-label="${t('Lugha', 'Language')}"><button type="button" data-lang="sw" aria-pressed="${language === 'sw'}">SW</button><button type="button" data-lang="en" aria-pressed="${language === 'en'}">EN</button></div></div></header>
 <div id="banner" class="banner" role="alert" hidden></div>
 <main id="login" class="login-shell"><section class="login-card"><div><div class="eyebrow">${t('Utulivu unaanza hapa', 'A calmer group starts here')}</div><h1>${t('Group lako.<br><span>Udhibiti wako.</span>', 'Your group.<br><span>Your controls.</span>')}</h1><p>${t('Tuma /dashboard faraghani kwa @sautilinkpilotbot, kisha gusa kitufe kipya cha Mini App. Link ya kawaida ya website ndani ya Telegram haiwezi kukuthibitisha.', 'Send /dashboard privately to @sautilinkpilotbot, then tap the fresh Open Pilot panel Mini App button. A regular website link opened inside Telegram cannot sign you in.')}</p><a class="button" href="https://t.me/sautilinkpilotbot?start=dashboard">${dashboardIcon('send')}${t('Fungua ndani ya Telegram', 'Open in Telegram')}</a></div><aside class="login-access" aria-labelledby="access-title"><h2 id="access-title">${t('Nafasi yako ya faragha.', 'Your private workspace.')}</h2><div class="login-access-row"><span aria-hidden="true">${dashboardIcon('user')}</span><div><strong>${t('Kwa members', 'For members')}</strong><p>${t('Matukio yako, rufaa zako na kikagua links.', 'Your cases, your appeals and a link checker.')}</p></div></div><div class="login-access-row"><span aria-hidden="true">${dashboardIcon('shield')}</span><div><strong>${t('Kwa admins', 'For admins')}</strong><p>${t('Groups zako, mipangilio na maamuzi ya moderation.', 'Your groups, settings and moderation decisions.')}</p></div></div><div class="login-access-row"><span aria-hidden="true">${dashboardIcon('verified')}</span><div><strong>${t('Imethibitishwa kupitia Telegram', 'Verified through Telegram')}</strong><p>${t('Fungua paneli kutoka kwenye bot ili kuendelea.', 'Open the panel from the bot to continue.')}</p></div></div></aside></section><div class="login-foot"><span>${t('SW / EN · Kwa members na admins · Kila group na mipangilio yake', 'SW / EN · For members and admins · Each group has its own settings')}</span><a href="/privacy${languageQuery}">${t('Faragha na taarifa zako', 'Privacy and your information')}</a></div><section class="login-features"><div class="login-feature" data-public-icon-intro>${dashboardIcon('appeals')}<h2>${t('Maamuzi yaliyo wazi', 'Clear decisions')}</h2><p>${t('Ona sababu ya hatua, muda wa adhabu na hali ya ujumbe wa taarifa.', 'See the reason for an action, its duration and the announcement status.')}</p></div><div class="login-feature" data-public-icon-intro>${dashboardIcon('message')}<h2>${t('Nafasi ya kusikilizwa', 'Room to be heard')}</h2><p>${t('Tuma rufaa yako kwa admins wa group na fuatilia jibu lao faraghani.', 'Send an appeal to your group admins and follow their decision privately.')}</p></div><div class="login-feature" data-public-icon-intro>${dashboardIcon('settings')}<h2>${t('Usimamizi unaokufaa', 'Controls that fit')}</h2><p>${t('Admins huamua whitelist, ukaribisho, ulinzi wa spam na namna ya kupokea taarifa.', 'Admins choose the whitelist, welcomes, spam controls and the reports they receive.')}</p></div></section></main>
@@ -472,14 +472,33 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
     $('login').hidden = true; $('app').hidden = false;
     render();
     const personalTask = state.view === 'mystatus' ? loadOwn() : null;
+    const preferred = params.get('chat') || params.get('group');
+    const validPreferred = preferred && /^-[1-9]\d{0,15}$/.test(preferred);
+    // Fast path: validate the explicitly selected group in parallel with
+    // group discovery. A verified overview can render immediately instead of
+    // waiting for every Telegram group to finish the admin roster scan.
+    // A supplied URL/chat hint NEVER grants access: the server checks the
+    // user's current Telegram role before returning this data.
+    const preferredTask = validPreferred && !['mystatus','checklink'].includes(state.view)
+      ? query('overview', preferred).then(verified => {
+          if (!verified?.group || String(verified.group.id) !== preferred) return null;
+          if (state.chatId && state.chatId !== preferred) return verified;
+          state.chatId = preferred;
+          state.overview = verified;
+          appendGroups([verified.group]);
+          $('header-state').replaceChildren(icon('verified'),document.createTextNode(t('Telegram imethibitishwa','Telegram verified')));
+          render();
+          return verified;
+        }).catch(() => null)
+      : Promise.resolve(null);
     try {
-      const data = await query('groups', null); state.groups = data.groups || []; state.groupsCursor = data.nextCursor || null;
-      const preferred = params.get('chat') || params.get('group');
-      let preferredOverview = null;
-      if (preferred && /^-[1-9]\d{0,15}$/.test(preferred) && !state.groups.some(group => String(group.id) === preferred)) {
-        try { preferredOverview = await query('overview', preferred); appendGroups([preferredOverview.group]); } catch { /* A display hint never grants access. */ }
-      }
-      state.chatId = String(state.groups.find(group => String(group.id) === preferred)?.id || state.groups[0]?.id || '') || null;
+      const data = await query('groups', null);
+      const remembered = state.groups;
+      state.groups = data.groups || [];
+      appendGroups(remembered); // Keep any group already verified by the fast path.
+      state.groupsCursor = data.nextCursor || null;
+      const preferredOverview = await preferredTask;
+      state.chatId = String(state.groups.find(group => String(group.id) === preferred)?.id || state.chatId || state.groups[0]?.id || '') || null;
       if (preferredOverview && String(preferredOverview.group.id) === state.chatId) state.overview = preferredOverview;
       if (!state.groups.length && !['mystatus', 'checklink'].includes(state.view)) state.view = 'mystatus';
       $('header-state').replaceChildren(icon('verified'), document.createTextNode(t('Telegram imethibitishwa', 'Telegram verified')));
