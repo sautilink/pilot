@@ -55,7 +55,7 @@ async function harness({ lang = 'en', view = 'overview', group = '-1001', groups
     close() { this.open = false; this.listeners.close?.(); }
   }
   const document = {
-    getElementById(id) { if (!ids.has(id)) { if (id.startsWith('tools-icon-')) return null; const node = new Node('div'); node.id = id; if (id === 'tools-app') node.hidden = true; } return ids.get(id); },
+    getElementById(id) { if (!ids.has(id)) { if (id.startsWith('tools-icon-')) return null; const node = new Node('div'); node.id = id; if (['tools-app','pilot-tools-startup-loading','pilot-tools-startup-loading-slow'].includes(id)) node.hidden = true; } return ids.get(id); },
     createElement(tag) { return new Node(tag); },
     createTextNode(text) { const node = new Node('#text'); node.textContent = text; return node; },
     querySelectorAll(selector) { return selector === '[data-lang]' ? languages : []; },
