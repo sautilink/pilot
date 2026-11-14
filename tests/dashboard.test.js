@@ -114,7 +114,7 @@ async function settingsHarness(language = 'en', saved = {}, options = {}) {
   const currentUrl = new URL(options.url || `https://pilot.sautilink.com/app?tab=settings&group=${group.id}&lang=${language}`);
   const script = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)][0][1];
   vm.runInNewContext(script, {
-    document, window: { Telegram: { WebApp: { initData: 'public-test-init-data', ready() {}, expand() {} } } },
+    document, window: { Telegram: { WebApp: { initData: options.initData ?? 'public-test-init-data', platform: options.platform || 'unknown', ready() {}, expand() {} } } },
     location: { href: currentUrl.href, search: currentUrl.search, replace(url) { replacements.push(url); } },
     URL, URLSearchParams, crypto: webcrypto, setTimeout: () => 1, clearTimeout() {},
     fetch: async (url, options) => {
@@ -131,6 +131,7 @@ async function settingsHarness(language = 'en', saved = {}, options = {}) {
   const content = document.getElementById('content');
   return {
     content, requests, templates, replacements, languageButtons, html,
+    element: id => document.getElementById(id),
     nodes: () => walk(content), navigation: () => walk(document.getElementById('sidebar')),
     input: name => walk(content).find(node => node.name === name), flush: nextTurn,
   };
@@ -259,4 +260,37 @@ test('base allowlist displays the current approved Telegram links in both langua
     assert.match(h.content.textContent, language === 'en' ? /approved Telegram links/ : /links za Telegram zilizoidhinishwa/);
     assert.doesNotMatch(h.content.textContent, /sautilink_cloud|approved channels|channels zilizoidhinishwa/);
   }
+});
+
+
+test('Telegram Mini App without signed initData shows actionable recovery instead of anonymous marketing page',async()=>{
+  const h=await settingsHarness('en',{},{
+    initData:'',platform:'android',
+    url:'https://pilot.sautilink.com/app?tab=settings&group=-1001001&lang=en'
+  });
+  assert.equal(h.requests.length,0);
+  assert.equal(h.element('login').hidden,true);
+  assert.equal(h.element('app').hidden,true);
+  assert.equal(h.element('session-recovery').hidden,false);
+  assert.match(h.element('session-recovery-link').href,/feature_settings_-1001001/);
+});
+test('Mini App raw signed fragment recovers startup when Telegram SDK has no WebApp object data',async()=>{
+  const payload='auth_date=1794620000&user=%7B%22id%22%3A101%7D&hash='+ 'a'.repeat(64);
+  const h=await settingsHarness('en',{},{
+    initData:'',platform:'unknown',
+    url:'https://pilot.sautilink.com/app?tab=settings&group=-1001001#tgWebAppData='+encodeURIComponent(payload)+'&tgWebAppPlatform=android'
+  });
+  assert.equal(h.element('login').hidden,true);
+  assert.equal(h.element('session-recovery').hidden,true);
+  assert.deepEqual(h.requests.map(x=>x.body.view),['groups','overview']);
+  assert.equal(h.requests[0].options.headers.Authorization,'tma '+payload);
+});
+test('ordinary visitor without Telegram session stays on public welcome and triggers no API requests',async()=>{
+  const h=await settingsHarness('en',{},{
+    initData:'',platform:'unknown',
+    url:'https://pilot.sautilink.com/app?lang=en'
+  });
+  assert.equal(h.element('login').hidden,false);
+  assert.equal(h.element('session-recovery').hidden,false,true);
+  assert.equal(h.requests.length,0);
 });
