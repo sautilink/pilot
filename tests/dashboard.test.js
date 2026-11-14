@@ -117,8 +117,8 @@ async function settingsHarness(language = 'en', saved = {}, options = {}) {
     document, window: { Telegram: { WebApp: { initData: options.initData ?? 'public-test-init-data', platform: options.platform || 'unknown', ready() {}, expand() {} } } },
     location: { href: currentUrl.href, search: currentUrl.search, replace(url) { replacements.push(url); } },
     URL, URLSearchParams, crypto: webcrypto, setTimeout: () => 1, clearTimeout() {},
-    fetch: async (url, options) => {
-      const body = JSON.parse(options.body); requests.push({ url, options, body });
+    fetch: async (url, fetchOptions) => {
+      const body = JSON.parse(fetchOptions.body); requests.push({ url, options: fetchOptions, body });
       let data;
       if (body.action === 'configure') { Object.assign(overview.settings, body.input.settings); data = { ok: true }; }
       else if (body.view === 'groups') { if(options.groupDelay) await options.groupDelay; data = { groups: [group] }; }
@@ -309,4 +309,30 @@ test('verified preferred group renders while slow Telegram group discovery is st
   assert.deepEqual(h.requests.map(x=>x.body.view),['overview','groups']);
   release();
   await h.flush();
+});
+
+test('Mini App shows Please wait while group API is pending, then dismisses it on verified data',async()=>{
+  let release;
+  const groupDelay=new Promise(resolve=>{release=resolve;});
+  const h=await settingsHarness('en',{},{
+    url:'https://pilot.sautilink.com/app?tab=settings&lang=en',groupDelay
+  });
+  assert.equal(h.element('pilot-startup-loading').hidden,false);
+  assert.equal(h.element('app').hidden,false);
+  assert.equal(h.element('session-recovery').hidden,true);
+  release();
+  await h.flush();await h.flush();
+  assert.equal(h.element('pilot-startup-loading').hidden,true);
+  assert.ok(h.input('welcome_en'));
+});
+test('ordinary browser and Telegram session-recovery screen never show a misleading data-fetch spinner',async()=>{
+  const visitor=await settingsHarness('en',{},{
+    initData:'',platform:'unknown',url:'https://pilot.sautilink.com/app'
+  });
+  assert.equal(visitor.element('pilot-startup-loading').hidden,true);
+  const session=await settingsHarness('en',{},{
+    initData:'',platform:'android',url:'https://pilot.sautilink.com/app'
+  });
+  assert.equal(session.element('pilot-startup-loading').hidden,true);
+  assert.equal(session.element('session-recovery').hidden,false);
 });
