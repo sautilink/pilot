@@ -237,13 +237,10 @@ export function createControlService({ db, api, clock = () => Math.floor(Date.no
         const chunk = await Promise.all(page.slice(offset, offset + 4).map(async ({ chat_id: id }) => {
           if (!negativeId(id)) return null;
           try {
-            // Both calls are reads; never surface metadata until Telegram
-            // confirms the actor is an admin. Concurrent requests remove one
-            // full Telegram network round-trip per known group.
-            const [_,info]=await Promise.all([
-              authorize(user,Number(id)),chatInfo(Number(id))
-            ]);
-            return info;
+            // Never request or expose a group's title before fresh Telegram
+            // admin authorization. Four separate group checks remain parallel.
+            await authorize(user,Number(id));
+            return await chatInfo(Number(id));
           } catch { return null; } // Revoked/unavailable groups disclose no name.
         }));
         for (const result of chunk) if (result) groups.push(result);
