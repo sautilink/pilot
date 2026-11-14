@@ -30,3 +30,33 @@ export function miniAppTelegramContext(app,href,userAgent='',hasNativeBridge=fal
     return hash.has('tgWebAppVersion')||hash.has('tgWebAppPlatform')||hash.has('tgWebAppData');
   }catch{return false;}
 }
+
+/** Hide Telegram's native loading placeholder as soon as the Mini App UI
+ * starts, even if the optional remote JS SDK has not arrived yet.
+ * The event name is part of Telegram's documented WebView protocol.
+ * No user data, authorization or bot credentials are sent to this bridge.
+ */
+export function miniAppSignalReady(app,host){
+  try{
+    const sdk=app || host?.Telegram?.WebApp;
+    if(typeof sdk?.ready==='function'){
+      sdk.ready();
+      sdk.expand?.();
+      return 'sdk';
+    }
+    if(typeof host?.TelegramWebviewProxy?.postEvent==='function'){
+      host.TelegramWebviewProxy.postEvent('web_app_ready','{}');
+      return 'native';
+    }
+    const handler=host?.webkit?.messageHandlers?.TelegramWebviewProxy;
+    if(typeof handler?.postMessage==='function'){
+      handler.postMessage(JSON.stringify({eventType:'web_app_ready',eventData:{}}));
+      return 'ios';
+    }
+    if(typeof host?.external?.notify==='function'){
+      host.external.notify(JSON.stringify({eventType:'web_app_ready',eventData:{}}));
+      return 'desktop';
+    }
+  }catch{ /* Optional native bridge must never delay a verified view. */ }
+  return null;
+}
