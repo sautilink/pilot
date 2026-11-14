@@ -441,7 +441,7 @@ function dashboardClient(initialLanguage, previewData, makeRequestId, fillTempla
   async function start() {
     try { app?.ready(); app?.expand(); if (app?.isVersionAtLeast?.('6.1')) { const color = document.documentElement?.dataset?.theme === 'dark' ? '#0b0b0e' : '#ffffff'; app.setHeaderColor(color); app.setBackgroundColor(color); } } catch { /* Older Telegram clients still use the standard page. */ }
     if (!initData) {
-      if (miniAppTelegramContext(app,location.href)) {
+      if (miniAppTelegramContext(app,location.href,typeof navigator==='object'?navigator.userAgent:'',Boolean(window.TelegramWebviewProxy||window.TelegramGameProxy))) {
         // This Telegram window lacks verifiable init data. Do not load private
         // data or show the misleading unauthenticated landing page.
         $('login').hidden = true;
