@@ -461,7 +461,7 @@ function toolsClient(language, eatTimestamp, makeRequestId, careFactory, doctorC
   const requested = currentUrl.searchParams.get('section') || currentUrl.searchParams.get('view'); if (Object.hasOwn(names, requested)) state.view = requested;
   try { app?.ready?.(); app?.expand?.(); } catch { /* The ordinary browser welcome remains usable. */ }
   if (initData) groups();
-  else if (miniAppTelegramContext(app,location.href)) {
+  else if (miniAppTelegramContext(app,location.href,typeof navigator==='object'?navigator.userAgent:'',Boolean(window.TelegramWebviewProxy||window.TelegramGameProxy))) {
     $('tools-welcome').hidden=true;
     $('tools-recovery').hidden=false;
   }
