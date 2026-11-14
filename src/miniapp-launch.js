@@ -20,7 +20,10 @@ export function miniAppLaunchData(app,href) {
 
 // A visit inside Telegram without signed data is a broken/unsupported launch.
 // Detect it without treating the platform hint as authentication.
-export function miniAppTelegramContext(app,href) {
+export function miniAppTelegramContext(app,href,userAgent='',hasNativeBridge=false) {
+  // UI guidance only: these hints never authorize access. Real access always
+  // requires signed data verified by the backend.
+  if(hasNativeBridge || /Telegram/i.test(String(userAgent).slice(0,512)))return true;
   if(typeof app?.platform==='string' && app.platform && app.platform!=='unknown')return true;
   try {
     const hash=new URLSearchParams(new URL(href).hash.slice(1));
