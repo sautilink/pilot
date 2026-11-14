@@ -291,6 +291,6 @@ test('ordinary visitor without Telegram session stays on public welcome and trig
     url:'https://pilot.sautilink.com/app?lang=en'
   });
   assert.equal(h.element('login').hidden,false);
-  assert.equal(h.element('session-recovery').hidden,false,true);
+  assert.equal(h.element('session-recovery').hidden,true);
   assert.equal(h.requests.length,0);
 });
