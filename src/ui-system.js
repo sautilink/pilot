@@ -12,7 +12,7 @@ export const UI_TOKENS = `
 
 // Private Mini Apps must never block first paint on a remote Google Fonts
 // stylesheet. Inter is loaded afterwards; the system stack is the fallback.
-export const MINIAPP_UI_TOKENS = UI_TOKENS.replace(/^@import url\('[^']+'\);\s*/, '');
+export const MINIAPP_UI_TOKENS = UI_TOKENS.replace(/^\s*@import url\('[^']+'\);\s*/, '');
 export function miniAppFontHead() {
   return '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" id="pilot-miniapp-font" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600;650;700;750;800&display=swap" media="print">';
 }
