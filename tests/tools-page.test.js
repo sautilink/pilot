@@ -38,7 +38,7 @@ test('request IDs always use secure browser randomness', () => {
   assert.throws(() => toolsRequestId({}), /Secure randomness unavailable/);
 });
 
-async function harness({ lang = 'en', view = 'overview', group = '-1001', groups = [{ id: '-1001', title: 'Example community' }], owner = false, signed = true, data = {}, errorAction = null, member = false, theme = null } = {}) {
+async function harness({ lang = 'en', view = 'overview', group = '-1001', groups = [{ id: '-1001', title: 'Example community' }], owner = false, signed = true, telegramContext = false, fragmentData = null, data = {}, errorAction = null, member = false, theme = null } = {}) {
   const ids = new Map(), requests = [], replaced = [];
   class Node {
     constructor(tag) { this.tag = tag; this.children = []; this.listeners = {}; this.attributes = {}; this.dataset = {}; this.style = {}; this.value = ''; this.checked = false; this.disabled = false; this.hidden = false; this._text = ''; }
@@ -71,11 +71,11 @@ async function harness({ lang = 'en', view = 'overview', group = '-1001', groups
       stack.at(-1).append(node); if (!token.endsWith('/>')) stack.push(node);
     }
   }
-  const url = new URL(`https://pilot.sautilink.com/tools?${member ? 'section' : 'view'}=${view}&${member ? 'chat' : 'group'}=${group}&lang=${lang}#tgWebAppData=launch-placeholder`);
+  const url = new URL(`https://pilot.sautilink.com/tools?${member ? 'section' : 'view'}=${view}&${member ? 'chat' : 'group'}=${group}&lang=${lang}${fragmentData ? '#tgWebAppData='+encodeURIComponent(fragmentData)+'&tgWebAppPlatform=android' : signed ? '#tgWebAppData=launch-placeholder' : telegramContext ? '#tgWebAppPlatform=android' : ''}`);
   if (theme !== null) url.searchParams.set('theme', theme);
   url.searchParams.set('tgWebAppStartParam', 'private-launch-hint');
   vm.runInNewContext([...html.matchAll(/<script>([\s\S]*?)<\/script>/g)][0][1], {
-    document, window: { Telegram: { WebApp: { initData: signed ? 'test-signed-data' : '', ready() {}, expand() {} } } },
+    document, window: { Telegram: { WebApp: { initData: signed ? 'test-signed-data' : '', platform: telegramContext ? 'android' : 'unknown', ready() {}, expand() {} } } },
     location: { href: url.href, origin: url.origin, replace(value) { replaced.push(value); } }, URL, URLSearchParams, crypto: webcrypto, setTimeout: () => 1, clearTimeout() {},
     navigator: { clipboard: { async writeText() {} } },
     fetch: async (endpoint, options) => {
@@ -101,6 +101,20 @@ async function harness({ lang = 'en', view = 'overview', group = '-1001', groups
   };
 }
 
+test('Telegram webview without session shows recovery, not marketing page or private content', async () => {
+  const h=await harness({signed:false,telegramContext:true});
+  assert.equal(h.requests.length,0);
+  assert.equal(h.get('tools-app').hidden,true);
+  assert.equal(h.get('tools-welcome').hidden,true);
+  assert.equal(h.get('tools-recovery').hidden,false);
+});
+test('Community tools recover signed initData from Telegram launch fragment when bridge is empty', async () => {
+  const signedData='auth_date=1794620000&user=%7B%22id%22%3A101%7D&hash='+ 'a'.repeat(64);
+  const h=await harness({signed:false,telegramContext:true,fragmentData:signedData});
+  assert.equal(h.get('tools-app').hidden,false);
+  assert.equal(h.requests[0].options.headers.Authorization,'tma '+signedData);
+  assert.equal(h.requests[0].body.view,'groups');
+});
 test('ordinary browser visitor makes no API calls and sees no admin workspace', async () => {
   const h = await harness({ signed: false });
   assert.equal(h.requests.length, 0); assert.equal(h.get('tools-app').hidden, true); assert.equal(h.get('tools-welcome').hidden, false);
