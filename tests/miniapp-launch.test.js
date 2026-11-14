@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {miniAppLaunchData,miniAppTelegramContext,miniAppSignalReady} from '../src/miniapp-launch.js';
+import {renderDashboard} from '../src/dashboard.js';
+import {renderToolsPage} from '../src/tools-page.js';
+import {MINIAPP_UI_TOKENS,miniAppFontHead} from '../src/ui-system.js';
 
 const SIGNED='auth_date=1794620000&user=%7B%22id%22%3A101%7D&hash='+ 'a'.repeat(64);
 const launch='https://pilot.sautilink.com/app?tab=settings#tgWebAppData='+encodeURIComponent(SIGNED)+'&tgWebAppVersion=9.0&tgWebAppPlatform=android';
@@ -48,4 +51,15 @@ test('fast native readiness hides Telegram loading placeholder while remote SDK 
   assert.equal(miniAppSignalReady(null,{webkit:{messageHandlers:{TelegramWebviewProxy:{postMessage:x=>ios.push(JSON.parse(x))}}}}),'ios');
   assert.equal(ios[0].eventType,'web_app_ready');
   assert.equal(miniAppSignalReady(null,{}),null);
+});
+
+test('both Mini Apps avoid render-blocking Telegram and font requests',()=>{
+  assert.doesNotMatch(MINIAPP_UI_TOKENS,/@import\s+url/);
+  assert.match(miniAppFontHead(),/media="print"/);
+  for(const html of [renderDashboard({lang:'en'}),renderToolsPage({lang:'en'})]){
+    assert.match(html,/<script async src="https:\/\/telegram.org\/js\/telegram-web-app.js\?65"><\/script>/);
+    assert.match(html,/id="pilot-miniapp-font"[^>]*media="print"/);
+    assert.doesNotMatch(html,/@import url\('https:\/\/fonts.googleapis.com/);
+    assert.match(html,/web_app_ready/);
+  }
 });
