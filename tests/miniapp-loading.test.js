@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import vm from 'node:vm';
 import {renderDashboard} from '../src/dashboard.js';
 import {renderToolsPage} from '../src/tools-page.js';
 import {MINIAPP_LOADING_CSS,miniAppLoadingMarkup,createMiniAppLoading} from '../src/miniapp-loading.js';
@@ -28,8 +29,9 @@ test('loader reveals wait feedback and closes only on explicit finished outcome'
   const doc={getElementById:id=>nodes.get(id)};
   const timers={setTimeout:(fn,ms)=>{scheduled.push({fn,ms});return scheduled.length;},clearTimeout:id=>cancelled.push(id)};
   // Helpers are deliberately dependency-free: inject the browser stubs in VM.
-  const f=new Function('document','setTimeout','clearTimeout','createMiniAppLoading','return createMiniAppLoading("pilot-startup-loading");');
-  const loader=f(doc,timers.setTimeout,timers.clearTimeout,createMiniAppLoading);
+  const loader=vm.runInNewContext('('+createMiniAppLoading.toString()+')("pilot-startup-loading")',{
+    document:doc,setTimeout:timers.setTimeout,clearTimeout:timers.clearTimeout
+  });
   loader.show();
   assert.equal(nodes.get('pilot-startup-loading').hidden,false);
   assert.equal(nodes.get('pilot-startup-loading-slow').hidden,true);
