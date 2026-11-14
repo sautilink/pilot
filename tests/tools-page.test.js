@@ -38,7 +38,7 @@ test('request IDs always use secure browser randomness', () => {
   assert.throws(() => toolsRequestId({}), /Secure randomness unavailable/);
 });
 
-async function harness({ lang = 'en', view = 'overview', group = '-1001', groups = [{ id: '-1001', title: 'Example community' }], owner = false, signed = true, telegramContext = false, fragmentData = null, data = {}, errorAction = null, member = false, theme = null } = {}) {
+async function harness({ lang = 'en', view = 'overview', group = '-1001', groups = [{ id: '-1001', title: 'Example community' }], owner = false, signed = true, telegramContext = false, fragmentData = null, groupDelay = null, data = {}, errorAction = null, member = false, theme = null } = {}) {
   const ids = new Map(), requests = [], replaced = [];
   class Node {
     constructor(tag) { this.tag = tag; this.children = []; this.listeners = {}; this.attributes = {}; this.dataset = {}; this.style = {}; this.value = ''; this.checked = false; this.disabled = false; this.hidden = false; this._text = ''; }
@@ -83,7 +83,7 @@ async function harness({ lang = 'en', view = 'overview', group = '-1001', groups
       if (body.action === errorAction) return { ok: false, json: async () => ({ ok: false, error: 'operation_unknown' }) };
       let result;
       if (body.action) result = body.action === 'integration_create' ? { token: 'test-one-time-token' } : { ok: true };
-      else if (body.view === 'groups') result = { groups, nextCursor: null, owner };
+      else if (body.view === 'groups') { if(groupDelay) await groupDelay; result = { groups, nextCursor: null, owner }; }
       else result = data[body.view] || {};
       return { ok: true, json: async () => ({ ok: true, data: result }) };
     },
@@ -398,4 +398,22 @@ test('members explicitly opt into private event reminders and never see event ad
   assert.equal(h.requests.some(row => row.body.action), false); await h.confirm();
   const sent = h.requests.find(row => row.body.action === 'event_reminders');
   assert.equal(sent.body.chatId, '-1009'); assert.deepEqual(sent.body.input, { id: 'future-event', enabled: true, leadMinutes: 15, language: 'en' });
+});
+
+test('Community Tools Mini App shows branded Please wait until verified group data arrives',async()=>{
+  let release;
+  const groupDelay=new Promise(resolve=>{release=resolve;});
+  const h=await harness({groupDelay});
+  assert.equal(h.get('pilot-tools-startup-loading').hidden,false);
+  assert.equal(h.get('tools-app').hidden,true);
+  release();await h.flush();await h.flush();
+  assert.equal(h.get('pilot-tools-startup-loading').hidden,true);
+  assert.equal(h.get('tools-app').hidden,false);
+});
+test('Community Tools ordinary visitor and missing session never show a fake fetching state',async()=>{
+  const guest=await harness({signed:false,telegramContext:false});
+  assert.equal(guest.get('pilot-tools-startup-loading').hidden,true);
+  const recovery=await harness({signed:false,telegramContext:true});
+  assert.equal(recovery.get('pilot-tools-startup-loading').hidden,true);
+  assert.equal(recovery.get('tools-recovery').hidden,false);
 });
