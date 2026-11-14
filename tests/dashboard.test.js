@@ -81,7 +81,7 @@ async function settingsHarness(language = 'en', saved = {}, options = {}) {
   const walk = node => [node, ...node.children.flatMap(walk)];
   const languageButtons = [];
   const document = {
-    getElementById(id) { if (!ids.has(id)) { if (id.startsWith('pilot-icon-')) return null; const node = new Node('div'); node.id = id; if (['app','session-recovery'].includes(id)) node.hidden=true; } return ids.get(id); },
+    getElementById(id) { if (!ids.has(id)) { if (id.startsWith('pilot-icon-')) return null; const node = new Node('div'); node.id = id; if (['app','session-recovery','pilot-startup-loading','pilot-startup-loading-slow'].includes(id)) node.hidden=true; } return ids.get(id); },
     createElement: tag => new Node(tag),
     createElementNS(namespace, tag) { const node = new Node(tag); node.namespaceURI = namespace; return node; },
     createTextNode(text) { const node = new Node('#text'); node.textContent = text; return node; },
