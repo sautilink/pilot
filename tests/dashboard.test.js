@@ -121,7 +121,7 @@ async function settingsHarness(language = 'en', saved = {}, options = {}) {
       const body = JSON.parse(options.body); requests.push({ url, options, body });
       let data;
       if (body.action === 'configure') { Object.assign(overview.settings, body.input.settings); data = { ok: true }; }
-      else if (body.view === 'groups') data = { groups: [group] };
+      else if (body.view === 'groups') { if(options.groupDelay) await options.groupDelay; data = { groups: [group] }; }
       else if (body.view === 'overview') data = overview;
       else throw new Error(`Unexpected request ${JSON.stringify(body)}`);
       return { ok: true, json: async () => ({ ok: true, data }) };
@@ -282,7 +282,7 @@ test('Mini App raw signed fragment recovers startup when Telegram SDK has no Web
   });
   assert.equal(h.element('login').hidden,true);
   assert.equal(h.element('session-recovery').hidden,true);
-  assert.deepEqual(h.requests.map(x=>x.body.view),['groups','overview']);
+  assert.deepEqual(h.requests.map(x=>x.body.view),['overview','groups']);
   assert.equal(h.requests[0].options.headers.Authorization,'tma '+payload);
 });
 test('ordinary visitor without Telegram session stays on public welcome and triggers no API requests',async()=>{
@@ -293,4 +293,20 @@ test('ordinary visitor without Telegram session stays on public welcome and trig
   assert.equal(h.element('login').hidden,false);
   assert.equal(h.element('session-recovery').hidden,true);
   assert.equal(h.requests.length,0);
+});
+
+test('verified preferred group renders while slow Telegram group discovery is still pending', async () => {
+  let release;
+  const groupDelay=new Promise(resolve=>{release=resolve;});
+  const h=await settingsHarness('en',{},{
+    url:'https://pilot.sautilink.com/app?tab=settings&group=-1001001&lang=en',
+    groupDelay
+  });
+  // Group discovery is unresolved. A strictly verified overview has already
+  // populated the Settings editor, not the public splash or a stale cache.
+  assert.equal(h.element('app').hidden,false);
+  assert.ok(h.input('welcome_en'),'verified group settings render before the roster finishes');
+  assert.deepEqual(h.requests.map(x=>x.body.view),['overview','groups']);
+  release();
+  await h.flush();
 });

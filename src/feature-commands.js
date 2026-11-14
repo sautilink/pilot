@@ -121,7 +121,18 @@ export function createFeatureCommands({ store, control, dispatchControl, appUrl 
       history:'incidents',appeals:'appeals',stats:'overview',
       settings:'settings',whitelist:'links',alerts:'settings',report:'settings'
     }[command] || null;
-    if (command === 'dashboard') return page(t.dashboard);
+    if (command === 'dashboard') {
+      // A last-selected chat is only a navigation hint, never authorization.
+      // The Mini App verifies current Telegram admin rights before showing
+      // any group data, but this lets it render the preferred group directly.
+      let recent=null;
+      try {
+        const session=await store.adminContext(from.id);
+        if(/^-[1-9]\d{0,15}$/.test(String(session?.chat_id||'')))
+          recent=String(session.chat_id);
+      } catch { /* No saved group: fall back to discovery. */ }
+      return page(t.dashboard,'overview',recent);
+    }
     if (command === 'checklink' && !argument) return page(`${t.checkTitle}\n\n${t.checkUsage}`, 'checker');
     if (command === 'appeal' && !argument) return page(t.appealUsage, 'mycases');
     if (!control?.query) return page(t.unavailable, targetTab, groupId);
