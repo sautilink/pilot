@@ -282,7 +282,7 @@ test('Mini App raw signed fragment recovers startup when Telegram SDK has no Web
   });
   assert.equal(h.element('login').hidden,true);
   assert.equal(h.element('session-recovery').hidden,true);
-  assert.deepEqual(h.requests.map(x=>x.body.view),['groups','overview']);
+  assert.deepEqual(h.requests.map(x=>x.body.view),['overview','groups']);
   assert.equal(h.requests[0].options.headers.Authorization,'tma '+payload);
 });
 test('ordinary visitor without Telegram session stays on public welcome and triggers no API requests',async()=>{
